@@ -57,6 +57,50 @@ const money = n => new Intl.NumberFormat('en-PH', {
 
 const statusClass = s => s.toLowerCase().replaceAll(' ', '-')
 
+const cleanCell = value => String(value ?? '').trim()
+const parseAmount = value => {
+  const parsed = Number(String(value ?? '').replace(/[₱,\s]/g, ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function parseRqRows(rawRows = []) {
+  if (!Array.isArray(rawRows)) return []
+  const headerIndex = rawRows.findIndex(row =>
+    Array.isArray(row) && row.some(cell => cleanCell(cell).toLowerCase() === 'rq no.')
+  )
+  if (headerIndex < 0) return []
+
+  return rawRows.slice(headerIndex + 1)
+    .filter(row => Array.isArray(row) && cleanCell(row[1]))
+    .map((row, index) => {
+      const status = cleanCell(row[10]) || cleanCell(row[11]) || 'Unclassified'
+      return {
+        id: `${cleanCell(row[1])}-${index}`,
+        rq: cleanCell(row[1]),
+        date: cleanCell(row[0]),
+        description: cleanCell(row[4]),
+        supplier: cleanCell(row[7]) || '—',
+        po: cleanCell(row[6]) || '—',
+        amount: parseAmount(row[8]),
+        status
+      }
+    })
+}
+
+function summarizeStatuses(records) {
+  const colors = {
+    'Closed': '#15966b', 'Pending Approval': '#e6a23c', 'VOIDED': '#9aa8b8',
+    'Voided': '#9aa8b8', 'Pending Order': '#477fce', 'Fully Ordered': '#35a6b4',
+    'Rejected': '#d65d5d', 'Partially Received': '#8b72c8', 'Unclassified': '#c5cbd3'
+  }
+  const counts = new Map()
+  records.forEach(record => {
+    const name = record.status || 'Unclassified'
+    counts.set(name, (counts.get(name) || 0) + 1)
+  })
+  return [...counts.entries()].map(([name, value]) => ({ name, value, color: colors[name] || '#7b8794' }))
+}
+
 function App() {
   const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
@@ -158,11 +202,19 @@ function App() {
     setActive('Overview')
   }
 
+  const liveRqRows = useMemo(() => parseRqRows(liveData?.rq), [liveData])
+  const displayedRows = liveData ? liveRqRows : rows
+  const liveStatuses = useMemo(() => summarizeStatuses(liveRqRows), [liveRqRows])
+  const displayedStatuses = liveData ? liveStatuses : statusData
+  const totalAmount = liveRqRows.reduce((sum, record) => sum + record.amount, 0)
+  const closedCount = liveRqRows.filter(record => record.status.toLowerCase() === 'closed').length
+  const pendingCount = liveRqRows.filter(record => ['pending approval', 'pending order', 'rejected'].includes(record.status.toLowerCase())).length
+
   const filtered = useMemo(
-    () => rows.filter(r =>
+    () => displayedRows.filter(r =>
       Object.values(r).join(' ').toLowerCase().includes(query.toLowerCase())
     ),
-    [query]
+    [query, displayedRows]
   )
 
   const isOverview = active === 'Overview'
@@ -259,7 +311,7 @@ function App() {
         <div className="sidebar-bottom">
           <div className="sync-card">
             <div className="sync-icon"><FileSpreadsheet size={17}/></div>
-            <div><b>Data connection</b><small><i className="dot amber"/> Integration not configured</small></div>
+            <div><b>Data connection</b><small><i className={`dot ${dataError ? 'amber' : dataLoading ? 'amber' : liveData ? 'green' : 'amber'}`}/> {dataError ? 'Sync error' : dataLoading ? 'Syncing...' : liveData ? 'Google Sheets connected' : 'Awaiting data'}</small></div>
           </div>
           <button className="nav-item"><Settings2 size={18}/><span>Settings</span></button>
           <div className="user-profile">
@@ -277,7 +329,7 @@ function App() {
           <button className="hamburger" onClick={() => setMobileOpen(true)}><Menu/></button>
           <div className="breadcrumb">Operations <ChevronRight size={14}/> <b>{active}</b></div>
           <div className="top-actions">
-            <span className="environment"><i className="dot amber"/> DEMO DATA</span>
+            <span className="environment"><i className={`dot ${liveData && !dataError ? 'green' : 'amber'}`}/> {liveData && !dataError ? 'LIVE DATA' : 'DEMO DATA'}</span>
             <button className="icon-button" aria-label="Notifications"><Bell size={18}/><i/></button>
             <div className="top-avatar">MT</div>
           </div>
@@ -299,27 +351,27 @@ function App() {
           {!isOverview && (
             <div className="module-notice">
               <AlertCircle size={18}/>
-              <div><b>Prototype view</b><span>This screen is a design starter. Live records will appear after the secure Google Sheets integration is configured.</span></div>
+              <div><b>{liveData ? 'Module data connected' : 'Prototype view'}</b><span>{liveData ? 'Google Sheets connection is active. This module view is being populated from the connected workbook.' : 'Live records will appear after the secure Google Sheets integration is configured.'}</span></div>
             </div>
           )}
 
           <section className="kpi-grid">
-            <Kpi icon={ClipboardList} label="RQ line items" value="144" note="Across 70 request references" tone="blue" trend="Workbook snapshot"/>
-            <Kpi icon={CircleDollarSign} label="Recorded RQ value" value="₱970.45K" note="Sum of populated amount cells" tone="green" trend="Provisional"/>
-            <Kpi icon={Wallet} label="Pending action" value="29" note="14 approval · 11 order · 4 rejected" tone="amber" trend="Needs review"/>
-            <Kpi icon={CheckCircle2} label="Closed transactions" value="88" note="Based on recorded status" tone="purple" trend="61.1% of classified"/>
+            <Kpi icon={ClipboardList} label="RQ line items" value={liveData ? liveRqRows.length.toLocaleString('en-PH') : '144'} note={liveData ? 'Rows read from live RQ sheet' : 'Workbook snapshot'} tone="blue" trend={liveData ? 'Live source' : 'Demo / snapshot'}/>
+            <Kpi icon={CircleDollarSign} label="Recorded RQ value" value={liveData ? money(totalAmount) : '₱970.45K'} note={liveData ? 'Sum of populated live amount cells' : 'Snapshot amount total'} tone="green" trend={liveData ? 'Live source' : 'Provisional'}/>
+            <Kpi icon={Wallet} label="Pending action" value={liveData ? pendingCount.toLocaleString('en-PH') : '29'} note={liveData ? 'Pending approval · order · rejected' : 'Snapshot status count'} tone="amber" trend="Needs review"/>
+            <Kpi icon={CheckCircle2} label="Closed transactions" value={liveData ? closedCount.toLocaleString('en-PH') : '88'} note={liveData ? 'Based on live recorded status' : 'Snapshot status count'} tone="purple" trend={liveData ? 'Live source' : 'Workbook snapshot'}/>
           </section>
 
-          <div className="alert-banner">
+          {!liveData && <div className="alert-banner">
             <div className="alert-symbol"><AlertCircle size={19}/></div>
             <div><b>Source data validation required</b><p>RQ detail amounts total ₱970,450.86, while the workbook summary shows ₱928,950.86. A ₱41,500.00 difference needs reconciliation before financial KPIs are finalized.</p></div>
             <button onClick={() => setActive('RQ / PO Monitoring')}>Review records <ChevronRight size={16}/></button>
-          </div>
+          </div>}
 
           <section className="analytics-grid">
             <div className="panel trend-panel">
               <div className="panel-head">
-                <div><h3>Procurement activity</h3><p>Illustrative monthly trend · not live source data</p></div>
+                <div><h3>Procurement activity</h3><p>Illustrative monthly trend · not yet connected to dated transaction aggregation</p></div>
                 <button className="select-mini">2026 <ChevronDown size={14}/></button>
               </div>
               <div className="chart-legend"><span><i className="legend-dot blue"/> Requests</span><span><i className="legend-dot teal"/> Amount (₱K)</span></div>
@@ -338,14 +390,14 @@ function App() {
             </div>
 
             <div className="panel status-panel">
-              <div className="panel-head"><div><h3>RQ status distribution</h3><p>142 classified · 2 unclassified</p></div><button className="more-button">•••</button></div>
-              <div className="status-total"><strong>142</strong><span>classified line items</span></div>
+              <div className="panel-head"><div><h3>RQ status distribution</h3><p>{liveData ? `${liveRqRows.length} live line items` : '142 classified · 2 unclassified'}</p></div><button className="more-button">•••</button></div>
+              <div className="status-total"><strong>{liveData ? liveRqRows.length : 142}</strong><span>{liveData ? 'live line items' : 'classified line items'}</span></div>
               <div className="status-list">
-                {statusData.map(s => (
+                {displayedStatuses.map(s => (
                   <div className="status-row" key={s.name}>
                     <span><i style={{background:s.color}}/>{s.name}</span>
                     <b>{s.value}</b>
-                    <div className="bar-track"><i style={{width:`${s.value/142*100}%`,background:s.color}}/></div>
+                    <div className="bar-track"><i style={{width:`${s.value/(liveData ? (liveRqRows.length || 1) : 142)*100}%`,background:s.color}}/></div>
                   </div>
                 ))}
               </div>
@@ -354,7 +406,7 @@ function App() {
 
           <section className="panel transactions-panel">
             <div className="panel-head transaction-heading">
-              <div><h3>Recent RQ / PO transactions</h3><p>Quick access to procurement records</p></div>
+              <div><h3>Recent RQ / PO transactions</h3><p>{liveData ? 'Records loaded from the live RQ sheet' : 'Quick access to sample procurement records'}</p></div>
               <button className="btn text-btn" onClick={() => setActive('RQ / PO Monitoring')}>View all records <ChevronRight size={16}/></button>
             </div>
             <div className="table-toolbar">
@@ -366,21 +418,21 @@ function App() {
               <table>
                 <thead><tr><th>REQUEST REFERENCE</th><th>DATE</th><th>DESCRIPTION</th><th>SUPPLIER</th><th>PO REFERENCE</th><th className="right">AMOUNT</th><th>STATUS</th></tr></thead>
                 <tbody>
-                  {filtered.map(r => (
-                    <tr key={r.rq}>
+                  {filtered.slice(0, 10).map(r => (
+                    <tr key={r.id || r.rq}>
                       <td><b className="ref">{r.rq}</b></td><td>{r.date}</td><td>{r.description}</td><td>{r.supplier}</td><td>{r.po}</td><td className="right amount">{money(r.amount)}</td><td><span className={`status-pill ${statusClass(r.status)}`}>{r.status}</span></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {filtered.length===0 && <div className="empty-state">No matching sample records.</div>}
+              {filtered.length===0 && <div className="empty-state">{liveData ? 'No matching live records.' : 'No matching sample records.'}</div>}
             </div>
-            <div className="table-footer"><span>Showing {filtered.length} of 5 sample records</span><button className="btn text-btn" onClick={()=>setQuery('')}>Clear search</button></div>
+            <div className="table-footer"><span>Showing {Math.min(filtered.length, 10)} of {filtered.length} {liveData ? 'live records' : 'sample records'}</span><button className="btn text-btn" onClick={()=>setQuery('')}>Clear search</button></div>
           </section>
 
           <footer className="footer">
             <span>© 2026 SEAOIL Mabini Terminal · Operations Monitoring</span>
-            <span><i className="dot amber"/> Demo mode · Google Sheets sync pending</span>
+            <span><i className={`dot ${liveData && !dataError ? 'green' : 'amber'}`}/> {dataError ? `Sync error: ${dataError}` : dataLoading ? 'Syncing Google Sheets...' : liveData ? `Live Google Sheets data · Last sync ${lastSync ? new Date(lastSync).toLocaleString() : 'just now'}` : 'Demo mode · Google Sheets sync pending'}</span>
           </footer>
         </div>
       </main>
