@@ -68,6 +68,41 @@ function App() {
   const [period, setPeriod] = useState('2026')
   const [mobileOpen, setMobileOpen] = useState(false)
 
+  // Google Sheets live-data connection
+  const [liveData, setLiveData] = useState(null)
+  const [dataLoading, setDataLoading] = useState(false)
+  const [dataError, setDataError] = useState('')
+  const [lastSync, setLastSync] = useState(null)
+
+  const fetchLiveData = async (currentUser) => {
+    setDataLoading(true)
+    setDataError('')
+
+    try {
+      const token = await currentUser.getIdToken()
+      const response = await fetch(
+        'https://mabini-terminal-api.jhun-maranan.workers.dev/api/sheets',
+        {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      )
+
+      const result = await response.json()
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Unable to load Google Sheets data.')
+      }
+
+      setLiveData(result.data)
+      setLastSync(result.lastSync)
+    } catch (error) {
+      console.error('Data sync error:', error)
+      setDataError(error.message || 'Data synchronization failed.')
+    } finally {
+      setDataLoading(false)
+    }
+  }
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async currentUser => {
       if (!currentUser) {
@@ -89,6 +124,7 @@ function App() {
       setUser(currentUser)
       setAuthError('')
       setAuthLoading(false)
+      await fetchLiveData(currentUser)
     })
 
     return unsubscribe
