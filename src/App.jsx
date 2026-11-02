@@ -10,7 +10,7 @@ import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis
 } from 'recharts'
 import {
-  onAuthStateChanged, signInWithPopup, signOut
+  browserLocalPersistence, onAuthStateChanged, setPersistence, signInWithPopup, signOut
 } from 'firebase/auth'
 import { auth, googleProvider, db } from './firebase'
 import { addDoc, collection, doc, onSnapshot, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore'
@@ -22,7 +22,6 @@ const nav = [
   { label: 'SDCI Monitoring', icon: Boxes, count: '20' },
   { label: 'For Approval', icon: ShieldCheck },
   { label: 'Reference & Item Master', icon: PackageCheck },
-  { label: 'Warehouse Management', icon: Warehouse },
 ]
 
 const statusData = [
@@ -110,6 +109,7 @@ function App() {
   const [authError, setAuthError] = useState('')
 
   const [active, setActive] = useState('Overview')
+  const [workspace, setWorkspace] = useState(() => localStorage.getItem('mabini-active-workspace') || '')
   const [query, setQuery] = useState('')
   const [period, setPeriod] = useState('2026')
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -181,6 +181,7 @@ function App() {
     setAuthError('')
 
     try {
+      await setPersistence(auth, browserLocalPersistence)
       const result = await signInWithPopup(auth, googleProvider)
       const email = result.user.email?.toLowerCase() || ''
 
@@ -201,6 +202,8 @@ function App() {
 
   const handleLogout = async () => {
     await signOut(auth)
+    localStorage.removeItem('mabini-active-workspace')
+    setWorkspace('')
     setActive('Overview')
   }
 
@@ -276,7 +279,42 @@ function App() {
     )
   }
 
-  if (active === 'Warehouse Management') return <WarehouseWorkspace user={user} onBack={() => setActive('Overview')} />
+  const chooseWorkspace = value => {
+    localStorage.setItem('mabini-active-workspace', value)
+    setWorkspace(value)
+    setActive('Overview')
+  }
+
+  if (!workspace) return (
+    <div style={{ minHeight: '100vh', background: '#f3f6fa', display: 'grid', placeItems: 'center', padding: 24, fontFamily: 'Nunito, sans-serif' }}>
+      <div style={{ width: 'min(900px, 100%)', background: '#fff', borderRadius: 22, padding: 32, boxShadow: '0 16px 50px rgba(20,40,70,.10)' }}>
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
+          <div style={{ color: '#477fce', fontSize: 11, fontWeight: 800, letterSpacing: 2 }}>SEAOIL PHILIPPINES · MABINI TERMINAL</div>
+          <h1 style={{ color: '#172b46', margin: '10px 0 6px' }}>Choose your dashboard</h1>
+          <p style={{ color: '#718096', margin: 0 }}>Select the workspace you want to open. Your selection will be remembered on this browser.</p>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 18 }}>
+          <button onClick={() => chooseWorkspace('operations')} style={{ textAlign: 'left', padding: 24, border: '1px solid #dbe6f2', borderRadius: 16, background: '#f7faff', cursor: 'pointer', color: '#172b46' }}>
+            <div style={{ width: 48, height: 48, display: 'grid', placeItems: 'center', borderRadius: 13, background: '#e4efff', color: '#2869b2' }}><LayoutDashboard size={25}/></div>
+            <h2 style={{ margin: '18px 0 6px' }}>Operations Monitoring</h2>
+            <p style={{ color: '#718096', margin: 0, lineHeight: 1.6 }}>RQ / PO, EPR, SDCI, approvals, and reference master data.</p>
+            <div style={{ marginTop: 18, color: '#2869b2', fontWeight: 800 }}>Open Operations →</div>
+          </button>
+          <button onClick={() => chooseWorkspace('warehouse')} style={{ textAlign: 'left', padding: 24, border: '1px solid #d8eee5', borderRadius: 16, background: '#f5fbf8', cursor: 'pointer', color: '#172b46' }}>
+            <div style={{ width: 48, height: 48, display: 'grid', placeItems: 'center', borderRadius: 13, background: '#e1f4eb', color: '#16875d' }}><Warehouse size={25}/></div>
+            <h2 style={{ margin: '18px 0 6px' }}>Warehouse Management</h2>
+            <p style={{ color: '#718096', margin: 0, lineHeight: 1.6 }}>Inventory, receiving, issuance, approvals, equipment, and gate pass.</p>
+            <div style={{ marginTop: 18, color: '#16875d', fontWeight: 800 }}>Open Warehouse →</div>
+          </button>
+        </div>
+        <div style={{ marginTop: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', color: '#718096', fontSize: 12 }}>
+          <span>Signed in as {user.email}</span><button onClick={handleLogout} style={{ border: 0, background: 'transparent', color: '#526174', fontWeight: 700, cursor: 'pointer' }}>Sign out</button>
+        </div>
+      </div>
+    </div>
+  )
+
+  if (workspace === 'warehouse') return <WarehouseWorkspace user={user} onBack={() => { localStorage.removeItem('mabini-active-workspace'); setWorkspace('') }} />
 
   return (
     <div className="app-shell">
@@ -293,6 +331,10 @@ function App() {
           <div><b>Mabini Terminal</b><small>SEAOIL Philippines</small></div>
           <ChevronDown size={16}/>
         </div>
+
+        <button className="nav-item" onClick={() => { localStorage.removeItem('mabini-active-workspace'); setWorkspace(''); setMobileOpen(false) }} style={{ margin: '10px 12px 18px', width: 'calc(100% - 24px)', color: '#2869b2', background: '#eef5ff' }}>
+          <Warehouse size={18}/><span>Switch Dashboard</span>
+        </button>
 
         <div className="nav-label">MAIN MENU</div>
         <nav>
@@ -352,87 +394,86 @@ function App() {
             </div>
           </div>
 
-          {!isOverview && (
-            <div className="module-notice">
-              <AlertCircle size={18}/>
-              <div><b>{liveData ? 'Module data connected' : 'Prototype view'}</b><span>{liveData ? 'Google Sheets connection is active. This module view is being populated from the connected workbook.' : 'Live records will appear after the secure Google Sheets integration is configured.'}</span></div>
-            </div>
-          )}
+          {isOverview ? (
+            <>
+              <section className="kpi-grid">
+                <Kpi icon={ClipboardList} label="RQ line items" value={liveData ? liveRqRows.length.toLocaleString('en-PH') : '144'} note={liveData ? 'Rows read from live RQ sheet' : 'Workbook snapshot'} tone="blue" trend={liveData ? 'Live source' : 'Demo / snapshot'}/>
+                <Kpi icon={CircleDollarSign} label="Recorded RQ value" value={liveData ? money(totalAmount) : '₱970.45K'} note={liveData ? 'Sum of populated live amount cells' : 'Snapshot amount total'} tone="green" trend={liveData ? 'Live source' : 'Provisional'}/>
+                <Kpi icon={Wallet} label="Pending action" value={liveData ? pendingCount.toLocaleString('en-PH') : '29'} note={liveData ? 'Pending approval · order · rejected' : 'Snapshot status count'} tone="amber" trend="Needs review"/>
+                <Kpi icon={CheckCircle2} label="Closed transactions" value={liveData ? closedCount.toLocaleString('en-PH') : '88'} note={liveData ? 'Based on live recorded status' : 'Snapshot status count'} tone="purple" trend={liveData ? 'Live source' : 'Workbook snapshot'}/>
+              </section>
 
-          <section className="kpi-grid">
-            <Kpi icon={ClipboardList} label="RQ line items" value={liveData ? liveRqRows.length.toLocaleString('en-PH') : '144'} note={liveData ? 'Rows read from live RQ sheet' : 'Workbook snapshot'} tone="blue" trend={liveData ? 'Live source' : 'Demo / snapshot'}/>
-            <Kpi icon={CircleDollarSign} label="Recorded RQ value" value={liveData ? money(totalAmount) : '₱970.45K'} note={liveData ? 'Sum of populated live amount cells' : 'Snapshot amount total'} tone="green" trend={liveData ? 'Live source' : 'Provisional'}/>
-            <Kpi icon={Wallet} label="Pending action" value={liveData ? pendingCount.toLocaleString('en-PH') : '29'} note={liveData ? 'Pending approval · order · rejected' : 'Snapshot status count'} tone="amber" trend="Needs review"/>
-            <Kpi icon={CheckCircle2} label="Closed transactions" value={liveData ? closedCount.toLocaleString('en-PH') : '88'} note={liveData ? 'Based on live recorded status' : 'Snapshot status count'} tone="purple" trend={liveData ? 'Live source' : 'Workbook snapshot'}/>
-          </section>
+              {!liveData && <div className="alert-banner">
+                <div className="alert-symbol"><AlertCircle size={19}/></div>
+                <div><b>Source data validation required</b><p>RQ detail amounts total ₱970,450.86, while the workbook summary shows ₱928,950.86. A ₱41,500.00 difference needs reconciliation before financial KPIs are finalized.</p></div>
+                <button onClick={() => setActive('RQ / PO Monitoring')}>Review records <ChevronRight size={16}/></button>
+              </div>}
 
-          {!liveData && <div className="alert-banner">
-            <div className="alert-symbol"><AlertCircle size={19}/></div>
-            <div><b>Source data validation required</b><p>RQ detail amounts total ₱970,450.86, while the workbook summary shows ₱928,950.86. A ₱41,500.00 difference needs reconciliation before financial KPIs are finalized.</p></div>
-            <button onClick={() => setActive('RQ / PO Monitoring')}>Review records <ChevronRight size={16}/></button>
-          </div>}
-
-          <section className="analytics-grid">
-            <div className="panel trend-panel">
-              <div className="panel-head">
-                <div><h3>Procurement activity</h3><p>Illustrative monthly trend · not yet connected to dated transaction aggregation</p></div>
-                <button className="select-mini">2026 <ChevronDown size={14}/></button>
-              </div>
-              <div className="chart-legend"><span><i className="legend-dot blue"/> Requests</span><span><i className="legend-dot teal"/> Amount (₱K)</span></div>
-              <div className="chart-wrap">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={trend} margin={{top:8,right:10,left:-18,bottom:0}}>
-                    <defs><linearGradient id="reqFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3c82d6" stopOpacity={.18}/><stop offset="100%" stopColor="#3c82d6" stopOpacity={0}/></linearGradient></defs>
-                    <CartesianGrid stroke="#edf1f5" vertical={false}/>
-                    <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{fill:'#8a97a7',fontSize:12}}/>
-                    <YAxis axisLine={false} tickLine={false} tick={{fill:'#8a97a7',fontSize:11}}/>
-                    <Tooltip/>
-                    <Area type="monotone" dataKey="requests" stroke="#3c82d6" strokeWidth={2.5} fill="url(#reqFill)"/>
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <div className="panel status-panel">
-              <div className="panel-head"><div><h3>RQ status distribution</h3><p>{liveData ? `${liveRqRows.length} live line items` : '142 classified · 2 unclassified'}</p></div><button className="more-button">•••</button></div>
-              <div className="status-total"><strong>{liveData ? liveRqRows.length : 142}</strong><span>{liveData ? 'live line items' : 'classified line items'}</span></div>
-              <div className="status-list">
-                {displayedStatuses.map(s => (
-                  <div className="status-row" key={s.name}>
-                    <span><i style={{background:s.color}}/>{s.name}</span>
-                    <b>{s.value}</b>
-                    <div className="bar-track"><i style={{width:`${s.value/(liveData ? (liveRqRows.length || 1) : 142)*100}%`,background:s.color}}/></div>
+              <section className="analytics-grid">
+                <div className="panel trend-panel">
+                  <div className="panel-head">
+                    <div><h3>Procurement activity</h3><p>Illustrative monthly trend · not yet connected to dated transaction aggregation</p></div>
+                    <button className="select-mini">2026 <ChevronDown size={14}/></button>
                   </div>
-                ))}
-              </div>
-            </div>
-          </section>
+                  <div className="chart-legend"><span><i className="legend-dot blue"/> Requests</span><span><i className="legend-dot teal"/> Amount (₱K)</span></div>
+                  <div className="chart-wrap">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={trend} margin={{top:8,right:10,left:-18,bottom:0}}>
+                        <defs><linearGradient id="reqFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3c82d6" stopOpacity={.18}/><stop offset="100%" stopColor="#3c82d6" stopOpacity={0}/></linearGradient></defs>
+                        <CartesianGrid stroke="#edf1f5" vertical={false}/>
+                        <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{fill:'#8a97a7',fontSize:12}}/>
+                        <YAxis axisLine={false} tickLine={false} tick={{fill:'#8a97a7',fontSize:11}}/>
+                        <Tooltip/>
+                        <Area type="monotone" dataKey="requests" stroke="#3c82d6" strokeWidth={2.5} fill="url(#reqFill)"/>
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
 
-          <section className="panel transactions-panel">
-            <div className="panel-head transaction-heading">
-              <div><h3>Recent RQ / PO transactions</h3><p>{liveData ? 'Records loaded from the live RQ sheet' : 'Quick access to sample procurement records'}</p></div>
-              <button className="btn text-btn" onClick={() => setActive('RQ / PO Monitoring')}>View all records <ChevronRight size={16}/></button>
-            </div>
-            <div className="table-toolbar">
-              <div className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search RQ, PO, description, supplier..."/></div>
-              <button className="btn secondary compact"><Filter size={15}/> Filter</button>
-              <button className="btn secondary compact"><Download size={15}/> Export</button>
-            </div>
-            <div className="table-scroll">
-              <table>
-                <thead><tr><th>REQUEST REFERENCE</th><th>DATE</th><th>DESCRIPTION</th><th>SUPPLIER</th><th>PO REFERENCE</th><th className="right">AMOUNT</th><th>STATUS</th></tr></thead>
-                <tbody>
-                  {filtered.slice(0, 10).map(r => (
-                    <tr key={r.id || r.rq}>
-                      <td><b className="ref">{r.rq}</b></td><td>{r.date}</td><td>{r.description}</td><td>{r.supplier}</td><td>{r.po}</td><td className="right amount">{money(r.amount)}</td><td><span className={`status-pill ${statusClass(r.status)}`}>{r.status}</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {filtered.length===0 && <div className="empty-state">{liveData ? 'No matching live records.' : 'No matching sample records.'}</div>}
-            </div>
-            <div className="table-footer"><span>Showing {Math.min(filtered.length, 10)} of {filtered.length} {liveData ? 'live records' : 'sample records'}</span><button className="btn text-btn" onClick={()=>setQuery('')}>Clear search</button></div>
-          </section>
+                <div className="panel status-panel">
+                  <div className="panel-head"><div><h3>RQ status distribution</h3><p>{liveData ? `${liveRqRows.length} live line items` : '142 classified · 2 unclassified'}</p></div><button className="more-button">•••</button></div>
+                  <div className="status-total"><strong>{liveData ? liveRqRows.length : 142}</strong><span>{liveData ? 'live line items' : 'classified line items'}</span></div>
+                  <div className="status-list">
+                    {displayedStatuses.map(s => (
+                      <div className="status-row" key={s.name}>
+                        <span><i style={{background:s.color}}/>{s.name}</span>
+                        <b>{s.value}</b>
+                        <div className="bar-track"><i style={{width:`${s.value/(liveData ? (liveRqRows.length || 1) : 142)*100}%`,background:s.color}}/></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+
+              <section className="panel transactions-panel">
+                <div className="panel-head transaction-heading">
+                  <div><h3>Recent RQ / PO transactions</h3><p>{liveData ? 'Records loaded from the live RQ sheet' : 'Quick access to sample procurement records'}</p></div>
+                  <button className="btn text-btn" onClick={() => setActive('RQ / PO Monitoring')}>View all records <ChevronRight size={16}/></button>
+                </div>
+                <div className="table-toolbar">
+                  <div className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search RQ, PO, description, supplier..."/></div>
+                  <button className="btn secondary compact"><Filter size={15}/> Filter</button>
+                  <button className="btn secondary compact"><Download size={15}/> Export</button>
+                </div>
+                <div className="table-scroll">
+                  <table>
+                    <thead><tr><th>REQUEST REFERENCE</th><th>DATE</th><th>DESCRIPTION</th><th>SUPPLIER</th><th>PO REFERENCE</th><th className="right">AMOUNT</th><th>STATUS</th></tr></thead>
+                    <tbody>
+                      {filtered.slice(0, 10).map(r => (
+                        <tr key={r.id || r.rq}>
+                          <td><b className="ref">{r.rq}</b></td><td>{r.date}</td><td>{r.description}</td><td>{r.supplier}</td><td>{r.po}</td><td className="right amount">{money(r.amount)}</td><td><span className={`status-pill ${statusClass(r.status)}`}>{r.status}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {filtered.length===0 && <div className="empty-state">{liveData ? 'No matching live records.' : 'No matching sample records.'}</div>}
+                </div>
+                <div className="table-footer"><span>Showing {Math.min(filtered.length, 10)} of {filtered.length} {liveData ? 'live records' : 'sample records'}</span><button className="btn text-btn" onClick={()=>setQuery('')}>Clear search</button></div>
+              </section>
+            </>
+          ) : (
+            <OperationsModule active={active} liveData={liveData} liveRqRows={liveRqRows} query={query} setQuery={setQuery} money={money}/>
+          )}
 
           <footer className="footer">
             <span>© 2026 SEAOIL Mabini Terminal · Operations Monitoring</span>
@@ -446,140 +487,174 @@ function App() {
 }
 
 
+function OperationsModule({ active, liveData, liveRqRows, query, setQuery, money }) {
+  const config = {
+    'RQ / PO Monitoring': { title: 'RQ / PO Monitoring', description: 'Requisition and purchase order records from the connected workbook.', keys: ['rq'], headers: ['RQ No.', 'Date', 'Description', 'Supplier', 'PO No.', 'Amount', 'Status'] },
+    'EPR Monitoring': { title: 'EPR Monitoring', description: 'EPR records from the connected workbook.', keys: ['epr'], headers: null },
+    'SDCI Monitoring': { title: 'SDCI Monitoring', description: 'SDCI records from the connected workbook.', keys: ['sdci'], headers: null },
+    'For Approval': { title: 'For Approval', description: 'Records listed in the approval worksheet. Review status here; approval actions are not enabled in this view.', keys: ['forApproval', 'approval'], headers: null },
+    'Reference & Item Master': { title: 'Reference & Item Master', description: 'Reference and item master data from the connected workbook.', keys: ['sheet4', 'reference', 'itemMaster'], headers: null }
+  }
+  const cfg = config[active] || config['RQ / PO Monitoring']
+  const source = cfg.keys.map(k => liveData?.[k]).find(Array.isArray) || []
+  const rqRows = active === 'RQ / PO Monitoring' ? liveRqRows.map(r => [r.rq, r.date, r.description, r.supplier, r.po, money(r.amount), r.status]) : []
+  const raw = active === 'RQ / PO Monitoring' ? rqRows : source
+  const rows = raw.filter(row => Array.isArray(row) && row.some(cell => String(cell ?? '').trim()))
+  const filteredRows = rows.filter(row => row.join(' ').toLowerCase().includes(query.toLowerCase()))
+  const headers = active === 'RQ / PO Monitoring' ? cfg.headers : (rows[0] || []).map((v, i) => String(v || `Column ${i+1}`))
+  const dataRows = active === 'RQ / PO Monitoring' ? filteredRows : filteredRows.slice(1)
+  return <section className="panel transactions-panel">
+    <div className="panel-head transaction-heading"><div><h3>{cfg.title}</h3><p>{cfg.description}</p></div><span className="environment">{liveData ? 'LIVE WORKBOOK' : 'WAITING FOR DATA'}</span></div>
+    <div className="table-toolbar"><div className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={`Search ${active}...`}/></div></div>
+    {!liveData ? <div className="empty-state">Google Sheets data is not connected. Please check the data connection.</div> : rows.length === 0 ? <div className="empty-state">No rows were returned for this worksheet. Check the Worker sheet mapping and worksheet data.</div> : <div className="table-scroll"><table><thead><tr>{headers.map((h,i)=><th key={i}>{h}</th>)}</tr></thead><tbody>{dataRows.slice(0,250).map((row,i)=><tr key={i}>{row.map((cell,j)=><td key={j}>{String(cell ?? '')}</td>)}</tr>)}</tbody></table>{dataRows.length===0 && <div className="empty-state">No matching records.</div>}</div>}
+    <div className="table-footer"><span>{dataRows.length} {active} rows {dataRows.length > 250 ? '(showing first 250)' : ''}</span><button className="btn text-btn" onClick={()=>setQuery('')}>Clear search</button></div>
+  </section>
+}
+
 function WarehouseWorkspace({ user, onBack }) {
-  const [section, setSection] = useState('Dashboard')
+  const [section, setSection] = useState('Inventory')
   const [items, setItems] = useState([])
   const [transactions, setTransactions] = useState([])
   const [equipment, setEquipment] = useState([])
   const [gatepasses, setGatepasses] = useState([])
-  const [requests, setRequests] = useState([])
-  const [maintenance, setMaintenance] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
-  const [search, setSearch] = useState('')
   const [itemForm, setItemForm] = useState({ code:'', name:'', category:'Consumables', uom:'pcs', location:'Warehouse', openingStock:'0', reorderLevel:'0' })
-  const [editingItem, setEditingItem] = useState(null)
   const [movement, setMovement] = useState({ itemId:'', quantity:'', reference:'', remarks:'' })
-  const [requestForm, setRequestForm] = useState({ itemId:'', quantity:'', purpose:'', neededBy:'', remarks:'' })
-  const [equipmentForm, setEquipmentForm] = useState({ name:'', brand:'', model:'', serialNumber:'', quantity:'1', condition:'Good', assignedTo:'', location:'Warehouse' })
-  const [maintenanceForm, setMaintenanceForm] = useState({ equipmentId:'', activity:'', remarks:'', nextDue:'' })
+  const [equipmentForm, setEquipmentForm] = useState({ name:'', brand:'', model:'', serialNumber:'', quantity:'1', condition:'Good', assignedTo:'' })
   const [gateForm, setGateForm] = useState({ itemId:'', quantity:'', recipient:'', purpose:'', reference:'' })
-  const [adjustForm, setAdjustForm] = useState({ itemId:'', newBalance:'', reason:'' })
 
   useEffect(() => {
-    const watch = (name, setter, sort=false) => onSnapshot(collection(db, name), snap => {
-      const data = snap.docs.map(d => ({ id:d.id, ...d.data() }))
-      setter(sort ? data.sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)) : data)
-      setLoading(false)
-    }, err => { setError(err.message); setLoading(false) })
-    const unsub = [
-      watch('warehouse_items', setItems),
-      watch('warehouse_transactions', setTransactions, true),
-      watch('warehouse_equipment', setEquipment),
-      watch('warehouse_gatepasses', setGatepasses, true),
-      watch('warehouse_requests', setRequests, true),
-      watch('warehouse_maintenance', setMaintenance, true)
+    const unsubscribers = [
+      onSnapshot(collection(db, 'warehouse_items'), snap => { setItems(snap.docs.map(d => ({ id:d.id, ...d.data() }))); setLoading(false) }, err => { setError(err.message); setLoading(false) }),
+      onSnapshot(collection(db, 'warehouse_transactions'), snap => setTransactions(snap.docs.map(d => ({ id:d.id, ...d.data() })).sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))), err => setError(err.message)),
+      onSnapshot(collection(db, 'warehouse_equipment'), snap => setEquipment(snap.docs.map(d => ({ id:d.id, ...d.data() }))), err => setError(err.message)),
+      onSnapshot(collection(db, 'warehouse_gatepasses'), snap => setGatepasses(snap.docs.map(d => ({ id:d.id, ...d.data() })).sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))), err => setError(err.message))
     ]
-    return () => unsub.forEach(fn => fn())
+    return () => unsubscribers.forEach(unsub => unsub())
   }, [])
 
+  const available = id => items.find(item => item.id === id)
   const fmt = n => Number(n || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })
-  const dateText = ts => ts?.toDate ? ts.toDate().toLocaleString() : (ts || '—')
-  const updateField = (setter, key, value) => setter(prev => ({ ...prev, [key]:value }))
-  const itemById = id => items.find(x => x.id === id)
-  const available = id => Number(itemById(id)?.stockOnHand || 0)
-  const lowStock = items.filter(i => !i.archived && Number(i.stockOnHand||0) <= Number(i.reorderLevel||0))
-  const pendingRequests = requests.filter(r => r.status === 'Pending')
-  const pendingGates = gatepasses.filter(g => g.status === 'Pending approval')
+  const dateText = ts => ts?.toDate ? ts.toDate().toLocaleString() : '—'
+  const updateField = (setter, key, value) => setter(prev => ({ ...prev, [key]: value }))
+
+  const saveItem = async e => {
+    e.preventDefault(); setBusy(true); setError(''); setNotice('')
+    try {
+      const opening = Number(itemForm.openingStock)
+      if (!itemForm.name.trim() || !Number.isFinite(opening) || opening < 0) throw new Error('Enter a valid item name and opening stock.')
+      await addDoc(collection(db, 'warehouse_items'), {
+        code:itemForm.code.trim(), name:itemForm.name.trim(), category:itemForm.category, uom:itemForm.uom.trim() || 'pcs',
+        location:itemForm.location.trim(), stockOnHand:opening, openingStock:opening, reorderLevel:Math.max(0, Number(itemForm.reorderLevel)||0),
+        createdAt:serverTimestamp(), updatedAt:serverTimestamp(), createdBy:user.email
+      })
+      setItemForm({ code:'', name:'', category:'Consumables', uom:'pcs', location:'Warehouse', openingStock:'0', reorderLevel:'0' })
+      setNotice('Inventory item saved.')
+    } catch(err) { setError(err.message) } finally { setBusy(false) }
+  }
+
+  const saveMovement = async (type, e) => {
+    e.preventDefault(); setBusy(true); setError(''); setNotice('')
+    try {
+      const qty = Number(movement.quantity)
+      if (!movement.itemId || !Number.isFinite(qty) || qty <= 0) throw new Error('Select an item and enter a quantity greater than zero.')
+      const itemRef = doc(db, 'warehouse_items', movement.itemId)
+      await runTransaction(db, async tx => {
+        const snap = await tx.get(itemRef)
+        if (!snap.exists()) throw new Error('Selected item no longer exists.')
+        const current = Number(snap.data().stockOnHand || 0)
+        if (type === 'ISSUANCE' && qty > current) throw new Error(`Insufficient stock. Available: ${current}`)
+        const next = type === 'RECEIVING' ? current + qty : current - qty
+        tx.update(itemRef, { stockOnHand:next, updatedAt:serverTimestamp() })
+        const transRef = doc(collection(db, 'warehouse_transactions'))
+        tx.set(transRef, { type, itemId:movement.itemId, itemName:snap.data().name, itemCode:snap.data().code || '', quantity:qty, uom:snap.data().uom || 'pcs', balanceAfter:next, reference:movement.reference.trim(), remarks:movement.remarks.trim(), createdAt:serverTimestamp(), createdBy:user.email })
+      })
+      setMovement({ itemId:'', quantity:'', reference:'', remarks:'' })
+      setNotice(type === 'RECEIVING' ? 'Stock received and balance updated.' : 'Stock issued and balance updated.')
+    } catch(err) { setError(err.message) } finally { setBusy(false) }
+  }
+
+  const saveEquipment = async e => {
+    e.preventDefault(); setBusy(true); setError(''); setNotice('')
+    try {
+      if (!equipmentForm.name.trim()) throw new Error('Equipment name is required.')
+      await addDoc(collection(db, 'warehouse_equipment'), { ...equipmentForm, quantity:Math.max(1, Number(equipmentForm.quantity)||1), createdAt:serverTimestamp(), updatedAt:serverTimestamp(), createdBy:user.email })
+      setEquipmentForm({ name:'', brand:'', model:'', serialNumber:'', quantity:'1', condition:'Good', assignedTo:'' })
+      setNotice('Equipment record saved.')
+    } catch(err) { setError(err.message) } finally { setBusy(false) }
+  }
+
+  const saveGatepass = async e => {
+    e.preventDefault(); setBusy(true); setError(''); setNotice('')
+    try {
+      const item = available(gateForm.itemId), qty = Number(gateForm.quantity)
+      if (!item || !Number.isFinite(qty) || qty <= 0 || !gateForm.recipient.trim() || !gateForm.purpose.trim()) throw new Error('Complete item, quantity, recipient, and purpose.')
+      if (qty > Number(item.stockOnHand || 0)) throw new Error('Gate pass quantity exceeds available stock.')
+      await addDoc(collection(db, 'warehouse_gatepasses'), { itemId:item.id, itemName:item.name, quantity:qty, uom:item.uom || 'pcs', recipient:gateForm.recipient.trim(), purpose:gateForm.purpose.trim(), reference:gateForm.reference.trim(), status:'For review', createdAt:serverTimestamp(), createdBy:user.email })
+      setGateForm({ itemId:'', quantity:'', recipient:'', purpose:'', reference:'' })
+      setNotice('Gate pass request recorded. Stock is not deducted until issuance is recorded.')
+    } catch(err) { setError(err.message) } finally { setBusy(false) }
+  }
+
+  const lowStock = items.filter(i => Number(i.stockOnHand || 0) <= Number(i.reorderLevel || 0))
   const inputStyle = { width:'100%', padding:'10px 12px', border:'1px solid #d8e0ea', borderRadius:8, font:'inherit', boxSizing:'border-box', background:'#fff' }
   const cardStyle = { background:'#fff', border:'1px solid #e5eaf0', borderRadius:14, padding:18, boxShadow:'0 3px 12px rgba(20,40,70,.04)' }
-  const buttonStyle = { border:0, borderRadius:8, background:'#2869b2', color:'#fff', padding:'9px 13px', fontWeight:700, cursor:'pointer' }
-  const secondaryStyle = { ...buttonStyle, background:'#eef4fb', color:'#285987', border:'1px solid #dbe6f2' }
-  const field = (label,key,value,setter,type='text',placeholder='') => <label style={{display:'grid',gap:6,color:'#526174',fontSize:13}}>{label}<input required={label.includes('*')} style={inputStyle} type={type} min={type==='number'?'0':undefined} step={type==='number'?'any':undefined} value={value} placeholder={placeholder} onChange={e=>updateField(setter,key,e.target.value)}/></label>
+  const buttonStyle = { border:0, borderRadius:8, background:'#2869b2', color:'#fff', padding:'10px 15px', fontWeight:700, cursor:'pointer' }
+  const field = (label, key, value, setter, type='text', placeholder='') => <label style={{display:'grid', gap:6, color:'#526174', fontSize:13}}>{label}<input style={inputStyle} type={type} value={value} placeholder={placeholder} onChange={e=>updateField(setter,key,e.target.value)}/></label>
   const selectField = (label,key,value,setter,options) => <label style={{display:'grid',gap:6,color:'#526174',fontSize:13}}>{label}<select style={inputStyle} value={value} onChange={e=>updateField(setter,key,e.target.value)}>{options.map(o=><option key={o} value={o}>{o}</option>)}</select></label>
-  const th = { textAlign:'left', padding:'10px', color:'#718096', fontSize:11, letterSpacing:'.04em', borderBottom:'1px solid #e8edf3', whiteSpace:'nowrap' }
-  const td = { padding:'11px 10px', borderBottom:'1px solid #eef1f5', fontSize:13, color:'#26384d', verticalAlign:'top' }
-  const run = async fn => { setBusy(true); setError(''); setNotice(''); try { await fn() } catch(e) { setError(e.message || 'Action failed.') } finally { setBusy(false) } }
+  const tabs = ['Inventory','Receiving','Issuance','Tools & Equipment','Gate Pass','Reports']
+  const th = { textAlign:'left', padding:'11px 10px', color:'#718096', fontSize:11, letterSpacing:'.05em', borderBottom:'1px solid #e8edf3', whiteSpace:'nowrap' }
+  const td = { padding:'12px 10px', borderBottom:'1px solid #eef1f5', fontSize:13, color:'#26384d' }
 
-  const saveItem = e => { e.preventDefault(); run(async()=>{
-    const opening=Number(itemForm.openingStock), reorder=Number(itemForm.reorderLevel)
-    if(!itemForm.name.trim() || !Number.isFinite(opening)||opening<0||!Number.isFinite(reorder)||reorder<0) throw Error('Check item name, opening stock, and reorder level.')
-    const payload={code:itemForm.code.trim(),name:itemForm.name.trim(),category:itemForm.category,uom:itemForm.uom.trim()||'pcs',location:itemForm.location.trim(),reorderLevel:reorder,updatedAt:serverTimestamp(),updatedBy:user.email}
-    if(editingItem) await updateDoc(doc(db,'warehouse_items',editingItem),payload)
-    else {
-      const ref=doc(collection(db,'warehouse_items'))
-      await runTransaction(db,async tx=>{tx.set(ref,{...payload,stockOnHand:opening,openingStock:opening,archived:false,createdAt:serverTimestamp(),createdBy:user.email}); if(opening>0){const tr=doc(collection(db,'warehouse_transactions'));tx.set(tr,{type:'OPENING BALANCE',itemId:ref.id,itemName:payload.name,itemCode:payload.code,quantity:opening,uom:payload.uom,balanceAfter:opening,reference:'Initial inventory',remarks:'Opening balance on item creation',createdAt:serverTimestamp(),createdBy:user.email})}})
-    }
-    setItemForm({code:'',name:'',category:'Consumables',uom:'pcs',location:'Warehouse',openingStock:'0',reorderLevel:'0'});setEditingItem(null);setNotice(editingItem?'Item details updated.':'Inventory item created.')
-  }) }
-  const saveMovement = (type,e) => { e.preventDefault(); run(async()=>{
-    const qty=Number(movement.quantity); if(!movement.itemId||!Number.isFinite(qty)||qty<=0) throw Error('Select an item and enter a quantity greater than zero.')
-    const ref=doc(db,'warehouse_items',movement.itemId)
-    await runTransaction(db,async tx=>{const snap=await tx.get(ref);if(!snap.exists()||snap.data().archived)throw Error('Item unavailable.');const current=Number(snap.data().stockOnHand||0);if(type==='ISSUANCE'&&qty>current)throw Error(`Insufficient stock. Available: ${current}`);const next=type==='RECEIVING'?current+qty:current-qty;tx.update(ref,{stockOnHand:next,updatedAt:serverTimestamp(),updatedBy:user.email});const tr=doc(collection(db,'warehouse_transactions'));tx.set(tr,{type,itemId:ref.id,itemName:snap.data().name,itemCode:snap.data().code||'',quantity:qty,uom:snap.data().uom||'pcs',balanceBefore:current,balanceAfter:next,reference:movement.reference.trim(),remarks:movement.remarks.trim(),createdAt:serverTimestamp(),createdBy:user.email})})
-    setMovement({itemId:'',quantity:'',reference:'',remarks:''});setNotice(type==='RECEIVING'?'Receiving posted; stock increased.':'Issuance posted; stock decreased.')
-  }) }
-  const saveRequest = e => {e.preventDefault();run(async()=>{const qty=Number(requestForm.quantity),item=itemById(requestForm.itemId);if(!item||!Number.isFinite(qty)||qty<=0||!requestForm.purpose.trim())throw Error('Complete item, quantity, and purpose.');if(qty>available(item.id))throw Error('Requested quantity exceeds current available stock.');await addDoc(collection(db,'warehouse_requests'),{itemId:item.id,itemName:item.name,itemCode:item.code||'',quantity:qty,uom:item.uom,purpose:requestForm.purpose.trim(),neededBy:requestForm.neededBy,remarks:requestForm.remarks.trim(),status:'Pending',requestedAt:serverTimestamp(),requestedBy:user.email});setRequestForm({itemId:'',quantity:'',purpose:'',neededBy:'',remarks:''});setNotice('Request submitted for approval. Stock has not been deducted.')})}
-  const decideRequest = (r,approved) => run(async()=>{const reqRef=doc(db,'warehouse_requests',r.id);await updateDoc(reqRef,{status:approved?'Approved':'Rejected',reviewedAt:serverTimestamp(),reviewedBy:user.email});setNotice(`Request ${approved?'approved':'rejected'}. Approval alone does not deduct stock; record issuance when released.`)})
-  const releaseRequest = r => run(async()=>{const itemRef=doc(db,'warehouse_items',r.itemId);await runTransaction(db,async tx=>{const [is,rs]=await Promise.all([tx.get(itemRef),tx.get(doc(db,'warehouse_requests',r.id))]);if(!is.exists()||rs.data()?.status!=='Approved')throw Error('Request must be approved and item must exist.');const current=Number(is.data().stockOnHand||0);if(Number(r.quantity)>current)throw Error(`Insufficient stock. Available: ${current}`);const next=current-Number(r.quantity);tx.update(itemRef,{stockOnHand:next,updatedAt:serverTimestamp(),updatedBy:user.email});tx.update(doc(db,'warehouse_requests',r.id),{status:'Released',releasedAt:serverTimestamp(),releasedBy:user.email});const tr=doc(collection(db,'warehouse_transactions'));tx.set(tr,{type:'ISSUANCE',itemId:r.itemId,itemName:r.itemName,itemCode:r.itemCode||'',quantity:Number(r.quantity),uom:r.uom,balanceBefore:current,balanceAfter:next,reference:`Request ${r.id}`,remarks:r.purpose,createdAt:serverTimestamp(),createdBy:user.email})});setNotice('Approved request released and stock deducted.')})
-  const saveGate = e => {e.preventDefault();run(async()=>{const item=itemById(gateForm.itemId),qty=Number(gateForm.quantity);if(!item||!Number.isFinite(qty)||qty<=0||!gateForm.recipient.trim()||!gateForm.purpose.trim())throw Error('Complete item, quantity, recipient, and purpose.');if(qty>available(item.id))throw Error('Gate pass quantity exceeds available stock.');await addDoc(collection(db,'warehouse_gatepasses'),{itemId:item.id,itemName:item.name,quantity:qty,uom:item.uom,recipient:gateForm.recipient.trim(),purpose:gateForm.purpose.trim(),reference:gateForm.reference.trim(),status:'Pending approval',createdAt:serverTimestamp(),createdBy:user.email});setGateForm({itemId:'',quantity:'',recipient:'',purpose:'',reference:''});setNotice('Gate pass submitted. No stock deducted yet.')})}
-  const decideGate = (g,approved) => run(async()=>{await updateDoc(doc(db,'warehouse_gatepasses',g.id),{status:approved?'Approved':'Rejected',reviewedAt:serverTimestamp(),reviewedBy:user.email});setNotice(`Gate pass ${approved?'approved':'rejected'}.`)})
-  const releaseGate = g => run(async()=>{const itemRef=doc(db,'warehouse_items',g.itemId);await runTransaction(db,async tx=>{const [is,gs]=await Promise.all([tx.get(itemRef),tx.get(doc(db,'warehouse_gatepasses',g.id))]);if(!is.exists()||gs.data()?.status!=='Approved')throw Error('Gate pass must be approved first.');const current=Number(is.data().stockOnHand||0);if(Number(g.quantity)>current)throw Error(`Insufficient stock. Available: ${current}`);const next=current-Number(g.quantity);tx.update(itemRef,{stockOnHand:next,updatedAt:serverTimestamp(),updatedBy:user.email});tx.update(doc(db,'warehouse_gatepasses',g.id),{status:'Released',releasedAt:serverTimestamp(),releasedBy:user.email});const tr=doc(collection(db,'warehouse_transactions'));tr.id;tx.set(tr,{type:'ISSUANCE',itemId:g.itemId,itemName:g.itemName,quantity:Number(g.quantity),uom:g.uom,balanceBefore:current,balanceAfter:next,reference:`Gate pass ${g.id}`,remarks:`Released to ${g.recipient}: ${g.purpose}`,createdAt:serverTimestamp(),createdBy:user.email})});setNotice('Gate pass released and stock deducted.')})
-  const adjustStock = e => {e.preventDefault();run(async()=>{const item=itemById(adjustForm.itemId),target=Number(adjustForm.newBalance);if(!item||!Number.isFinite(target)||target<0||!adjustForm.reason.trim())throw Error('Select item, valid new balance, and reason.');const ref=doc(db,'warehouse_items',item.id);await runTransaction(db,async tx=>{const snap=await tx.get(ref);const before=Number(snap.data().stockOnHand||0),delta=target-before;tx.update(ref,{stockOnHand:target,updatedAt:serverTimestamp(),updatedBy:user.email});const tr=doc(collection(db,'warehouse_transactions'));tx.set(tr,{type:'ADJUSTMENT',itemId:item.id,itemName:item.name,quantity:Math.abs(delta),balanceBefore:before,balanceAfter:target,uom:item.uom,reference:'Stock adjustment',remarks:adjustForm.reason.trim(),createdAt:serverTimestamp(),createdBy:user.email})});setAdjustForm({itemId:'',newBalance:'',reason:''});setNotice('Stock balance adjusted with audit entry.')})}
-  const saveEquipment = e => {e.preventDefault();run(async()=>{if(!equipmentForm.name.trim())throw Error('Equipment name is required.');await addDoc(collection(db,'warehouse_equipment'),{...equipmentForm,quantity:Math.max(1,Number(equipmentForm.quantity)||1),createdAt:serverTimestamp(),updatedAt:serverTimestamp(),createdBy:user.email});setEquipmentForm({name:'',brand:'',model:'',serialNumber:'',quantity:'1',condition:'Good',assignedTo:'',location:'Warehouse'});setNotice('Equipment record saved.')})}
-  const saveMaintenance = e => {e.preventDefault();run(async()=>{const eq=equipment.find(x=>x.id===maintenanceForm.equipmentId);if(!eq||!maintenanceForm.activity.trim())throw Error('Select equipment and enter maintenance activity.');await addDoc(collection(db,'warehouse_maintenance'),{equipmentId:eq.id,equipmentName:eq.name,activity:maintenanceForm.activity.trim(),remarks:maintenanceForm.remarks.trim(),nextDue:maintenanceForm.nextDue,createdAt:serverTimestamp(),createdBy:user.email});setMaintenanceForm({equipmentId:'',activity:'',remarks:'',nextDue:''});setNotice('Maintenance record saved.')})}
-  const archiveItem = item => run(async()=>{if(Number(item.stockOnHand||0)!==0)throw Error('Only zero-balance items can be archived.');await updateDoc(doc(db,'warehouse_items',item.id),{archived:true,archivedAt:serverTimestamp(),archivedBy:user.email,updatedAt:serverTimestamp()});setNotice('Item archived; historical transactions retained.')})
-  const exportCsv = (filename,rows) => {const csv=rows.map(row=>row.map(v=>`"${String(v??'').replaceAll('"','""')}"`).join(',')).join('\r\n');const blob=new Blob([`\uFEFF${csv}`],{type:'text/csv;charset=utf-8;'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.click();URL.revokeObjectURL(url)}
-  const table = (headers,rows) => <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{headers.map(h=><th style={th} key={h}>{h}</th>)}</tr></thead><tbody>{rows}</tbody></table></div>
-  const activeItems=items.filter(i=>!i.archived).filter(i=>`${i.code} ${i.name} ${i.category} ${i.location}`.toLowerCase().includes(search.toLowerCase()))
-
-  const tabs=['Dashboard','Inventory','Receiving','Requests & Approval','Issuance','Stock Adjustment','Tools & Equipment','Gate Pass','Reports']
-  return <div style={{minHeight:'100vh',background:'#f3f6fa',padding:24,fontFamily:'Nunito, sans-serif',color:'#172b46'}}>
-    <div style={{maxWidth:1450,margin:'0 auto'}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:16,flexWrap:'wrap',marginBottom:20}}>
-        <div><div style={{fontSize:11,letterSpacing:2,color:'#477fce',fontWeight:800}}>SEAOIL PHILIPPINES / MABINI TERMINAL</div><h1 style={{margin:'7px 0',fontSize:28}}>Warehouse Management</h1><div style={{color:'#718096',fontSize:13}}>Inventory control · Receiving · Approvals · Issuance · Equipment · Gate pass</div></div>
-        <button onClick={onBack} style={secondaryStyle}>← Back to Operations</button>
+  return <div style={{minHeight:'100vh', background:'#f3f6fa', padding:24, fontFamily:'Nunito, sans-serif', color:'#172b46'}}>
+    <div style={{maxWidth:1400, margin:'0 auto'}}>
+      <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:16, flexWrap:'wrap', marginBottom:22}}>
+        <div><div style={{fontSize:11, letterSpacing:2, color:'#477fce', fontWeight:800}}>SEAOIL PHILIPPINES / MABINI TERMINAL</div><h1 style={{margin:'7px 0', fontSize:28}}>Warehouse Management</h1><div style={{color:'#718096',fontSize:13}}>Inventory, stock movements, equipment accountability and gate passes</div></div>
+        <button style={{...buttonStyle,background:'#fff',color:'#2869b2',border:'1px solid #cbd8e8'}} onClick={onBack}>← Back to Operations</button>
       </div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(155px,1fr))',gap:12,marginBottom:16}}>
-        {[['Active Items',items.filter(i=>!i.archived).length],['Total Units',fmt(items.filter(i=>!i.archived).reduce((s,i)=>s+Number(i.stockOnHand||0),0))],['Low Stock',lowStock.length],['Pending Requests',pendingRequests.length],['Pending Gate Pass',pendingGates.length],['Movements',transactions.length]].map(([label,value])=><div key={label} style={cardStyle}><div style={{fontSize:12,color:'#718096'}}>{label}</div><div style={{fontSize:26,fontWeight:800,marginTop:7}}>{value}</div></div>)}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12,marginBottom:18}}>
+        {[['Inventory Items',items.length],['Total Units',fmt(items.reduce((s,i)=>s+Number(i.stockOnHand||0),0))],['Low Stock',lowStock.length],['Transactions',transactions.length]].map(([label,value])=><div key={label} style={cardStyle}><div style={{fontSize:12,color:'#718096'}}>{label}</div><div style={{fontSize:27,fontWeight:800,marginTop:7}}>{value}</div></div>)}
       </div>
-      <div style={{display:'flex',gap:7,flexWrap:'wrap',marginBottom:16}}>{tabs.map(t=><button key={t} onClick={()=>setSection(t)} style={{...buttonStyle,background:section===t?'#2869b2':'#fff',color:section===t?'#fff':'#526174',border:'1px solid #dbe3ed'}}>{t}</button>)}</div>
-      {error&&<div style={{...cardStyle,background:'#fff1f0',color:'#b42318',marginBottom:12}}>{error}</div>}
-      {notice&&<div style={{...cardStyle,background:'#ecfdf3',color:'#067647',marginBottom:12}}>{notice}</div>}
-      {loading?<div style={cardStyle}>Loading warehouse records…</div>:<>
-        {section==='Dashboard'&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:14}}>
-          <div style={cardStyle}><h3>Low-stock watchlist</h3>{lowStock.length?lowStock.map(i=><p key={i.id}>{i.name}: <b>{fmt(i.stockOnHand)} {i.uom}</b> (reorder at {fmt(i.reorderLevel)})</p>):<p>Walang item below reorder level.</p>}</div>
-          <div style={cardStyle}><h3>Pending actions</h3><p>Requests for approval: <b>{pendingRequests.length}</b></p><p>Gate passes for approval: <b>{pendingGates.length}</b></p><p>Equipment maintenance logs: <b>{maintenance.length}</b></p></div>
-          <div style={cardStyle}><h3>Recent movements</h3>{transactions.slice(0,8).map(t=><p key={t.id} style={{borderBottom:'1px solid #eef1f5',paddingBottom:7}}>{t.type} · {t.itemName} · {fmt(t.quantity)} {t.uom||''}</p>)}{!transactions.length&&<p>No stock movements yet.</p>}</div>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:16}}>{tabs.map(t=><button key={t} onClick={()=>setSection(t)} style={{...buttonStyle,background:section===t?'#2869b2':'#fff',color:section===t?'#fff':'#526174',border:'1px solid #dbe3ed'}}>{t}</button>)}</div>
+      {error && <div style={{...cardStyle,background:'#fff1f0',color:'#b42318',marginBottom:12}}>{error}</div>}
+      {notice && <div style={{...cardStyle,background:'#ecfdf3',color:'#067647',marginBottom:12}}>{notice}</div>}
+      {loading ? <div style={cardStyle}>Loading warehouse records…</div> : <>
+        {section==='Inventory' && <div style={{display:'grid',gridTemplateColumns:'minmax(300px, .8fr) minmax(400px, 1.5fr)',gap:16,alignItems:'start'}}>
+          <form onSubmit={saveItem} style={cardStyle}><h3 style={{marginTop:0}}>Add inventory item</h3><div style={{display:'grid',gap:11}}>
+            {field('Item code','code',itemForm.code,setItemForm)}{field('Item name *','name',itemForm.name,setItemForm)}
+            {selectField('Category','category',itemForm.category,setItemForm,['Consumables','Office Supplies','Maintenance','Safety / PPE','Electrical','Other'])}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>{field('Unit of measure','uom',itemForm.uom,setItemForm)}{field('Opening stock','openingStock',itemForm.openingStock,setItemForm,'number')}</div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}}>{field('Reorder level','reorderLevel',itemForm.reorderLevel,setItemForm,'number')}{field('Storage location','location',itemForm.location,setItemForm)}</div>
+            <button disabled={busy} style={buttonStyle}>{busy?'Saving…':'Save inventory item'}</button>
+          </div></form>
+          <div style={cardStyle}><h3 style={{marginTop:0}}>Inventory masterlist</h3><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Code','Item','Category','UOM','On hand','Reorder','Location'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{items.map(i=><tr key={i.id}><td style={td}>{i.code||'—'}</td><td style={td}><b>{i.name}</b></td><td style={td}>{i.category}</td><td style={td}>{i.uom}</td><td style={{...td,fontWeight:800,color:Number(i.stockOnHand||0)<=Number(i.reorderLevel||0)?'#b54708':'#067647'}}>{fmt(i.stockOnHand)}</td><td style={td}>{fmt(i.reorderLevel)}</td><td style={td}>{i.location||'—'}</td></tr>)}</tbody></table>{!items.length&&<p style={{color:'#718096'}}>No inventory items yet. Add the first actual item using the form.</p>}</div></div>
         </div>}
-        {section==='Inventory'&&<div style={{display:'grid',gridTemplateColumns:'minmax(280px,.75fr) minmax(400px,1.5fr)',gap:14,alignItems:'start'}}>
-          <form onSubmit={saveItem} style={cardStyle}><h3>{editingItem?'Edit inventory item':'Add inventory item'}</h3><div style={{display:'grid',gap:10}}>{field('Item code','code',itemForm.code,setItemForm)}{field('Item name *','name',itemForm.name,setItemForm)}{selectField('Category','category',itemForm.category,setItemForm,['Consumables','Office Supplies','Maintenance','Safety / PPE','Electrical','Tools','Other'])}{field('Unit of measure','uom',itemForm.uom,setItemForm)}{field('Opening stock (new item only)','openingStock',itemForm.openingStock,setItemForm,'number')}{field('Reorder level','reorderLevel',itemForm.reorderLevel,setItemForm,'number')}{field('Storage location','location',itemForm.location,setItemForm)}<div style={{display:'flex',gap:8}}><button disabled={busy} style={buttonStyle}>{busy?'Saving…':editingItem?'Update item':'Save item'}</button>{editingItem&&<button type="button" style={secondaryStyle} onClick={()=>{setEditingItem(null);setItemForm({code:'',name:'',category:'Consumables',uom:'pcs',location:'Warehouse',openingStock:'0',reorderLevel:'0'})}}>Cancel edit</button>}</div></div></form>
-          <div style={cardStyle}><div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}><h3>Inventory masterlist</h3><input style={{...inputStyle,maxWidth:260}} placeholder="Search item…" value={search} onChange={e=>setSearch(e.target.value)}/></div>{table(['Code','Item','Category','UOM','On hand','Reorder','Location','Actions'],activeItems.map(i=><tr key={i.id}><td style={td}>{i.code||'—'}</td><td style={td}><b>{i.name}</b></td><td style={td}>{i.category}</td><td style={td}>{i.uom}</td><td style={{...td,fontWeight:800,color:Number(i.stockOnHand||0)<=Number(i.reorderLevel||0)?'#b54708':'#067647'}}>{fmt(i.stockOnHand)}</td><td style={td}>{fmt(i.reorderLevel)}</td><td style={td}>{i.location||'—'}</td><td style={td}><button style={secondaryStyle} onClick={()=>{setEditingItem(i.id);setItemForm({code:i.code||'',name:i.name||'',category:i.category||'Consumables',uom:i.uom||'pcs',location:i.location||'',openingStock:'0',reorderLevel:String(i.reorderLevel||0)})}}>Edit</button>{' '}<button style={secondaryStyle} onClick={()=>archiveItem(i)}>Archive</button></td></tr>))}{!activeItems.length&&<p>No active inventory items yet.</p>}</div>
+        {(section==='Receiving'||section==='Issuance') && <div style={{...cardStyle,maxWidth:650}}><h3 style={{marginTop:0}}>{section==='Receiving'?'Record stock receiving':'Record stock issuance'}</h3><form onSubmit={e=>saveMovement(section==='Receiving'?'RECEIVING':'ISSUANCE',e)} style={{display:'grid',gap:12}}>
+          <label style={{display:'grid',gap:6,fontSize:13,color:'#526174'}}>Inventory item<select style={inputStyle} value={movement.itemId} onChange={e=>updateField(setMovement,'itemId',e.target.value)}><option value="">Select item</option>{items.map(i=><option key={i.id} value={i.id}>{i.code?i.code+' · ':''}{i.name} (On hand: {fmt(i.stockOnHand)} {i.uom})</option>)}</select></label>
+          {field('Quantity','quantity',movement.quantity,setMovement,'number')}{field('Reference / DR / RIS','reference',movement.reference,setMovement)}{field('Remarks','remarks',movement.remarks,setMovement)}
+          <button disabled={busy||!items.length} style={buttonStyle}>{busy?'Saving…':section==='Receiving'?'Save receiving':'Save issuance'}</button>
+        </form></div>}
+        {section==='Tools & Equipment' && <div style={{display:'grid',gridTemplateColumns:'minmax(300px,.8fr) minmax(400px,1.5fr)',gap:16,alignItems:'start'}}>
+          <form onSubmit={saveEquipment} style={cardStyle}><h3 style={{marginTop:0}}>Add equipment record</h3><div style={{display:'grid',gap:11}}>{field('Equipment name *','name',equipmentForm.name,setEquipmentForm)}{field('Brand','brand',equipmentForm.brand,setEquipmentForm)}{field('Model / specification','model',equipmentForm.model,setEquipmentForm)}{field('Serial number','serialNumber',equipmentForm.serialNumber,setEquipmentForm)}{field('Quantity','quantity',equipmentForm.quantity,setEquipmentForm,'number')}{selectField('Condition','condition',equipmentForm.condition,setEquipmentForm,['Good','For repair','Under maintenance','Unserviceable'])}{field('Assigned to','assignedTo',equipmentForm.assignedTo,setEquipmentForm)}<button disabled={busy} style={buttonStyle}>Save equipment</button></div></form>
+          <div style={cardStyle}><h3 style={{marginTop:0}}>Tools & equipment register</h3><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Equipment','Brand / Model','Serial no.','Qty','Condition','Assigned to'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{equipment.map(x=><tr key={x.id}><td style={td}>{x.name}</td><td style={td}>{[x.brand,x.model].filter(Boolean).join(' / ')||'—'}</td><td style={td}>{x.serialNumber||'—'}</td><td style={td}>{x.quantity}</td><td style={td}>{x.condition}</td><td style={td}>{x.assignedTo||'—'}</td></tr>)}</tbody></table>{!equipment.length&&<p style={{color:'#718096'}}>No equipment records yet.</p>}</div></div>
         </div>}
-        {section==='Receiving'&&<div style={{...cardStyle,maxWidth:650}}><h3>Record stock receiving</h3><form onSubmit={e=>saveMovement('RECEIVING',e)} style={{display:'grid',gap:11}}><label>Inventory item<select style={inputStyle} required value={movement.itemId} onChange={e=>updateField(setMovement,'itemId',e.target.value)}><option value="">Select item</option>{activeItems.map(i=><option key={i.id} value={i.id}>{i.name} · On hand {fmt(i.stockOnHand)} {i.uom}</option>)}</select></label>{field('Quantity *','quantity',movement.quantity,setMovement,'number')}{field('Delivery receipt / reference','reference',movement.reference,setMovement)}{field('Remarks','remarks',movement.remarks,setMovement)}<button disabled={busy} style={buttonStyle}>Post receiving</button></form></div>}
-        {section==='Requests & Approval'&&<div style={{display:'grid',gridTemplateColumns:'minmax(270px,.7fr) minmax(420px,1.5fr)',gap:14,alignItems:'start'}}>
-          <form onSubmit={saveRequest} style={cardStyle}><h3>Submit stock request</h3><div style={{display:'grid',gap:10}}><label>Item<select required style={inputStyle} value={requestForm.itemId} onChange={e=>updateField(setRequestForm,'itemId',e.target.value)}><option value="">Select item</option>{activeItems.map(i=><option key={i.id} value={i.id}>{i.name} · {fmt(i.stockOnHand)} {i.uom}</option>)}</select></label>{field('Quantity *','quantity',requestForm.quantity,setRequestForm,'number')}{field('Purpose *','purpose',requestForm.purpose,setRequestForm)}{field('Needed by','neededBy',requestForm.neededBy,setRequestForm,'date')}{field('Remarks','remarks',requestForm.remarks,setRequestForm)}<button disabled={busy} style={buttonStyle}>Submit for approval</button></div></form>
-          <div style={cardStyle}><h3>Request register & approval</h3>{table(['Date','Item','Qty','Requested by','Purpose','Status','Action'],requests.map(r=><tr key={r.id}><td style={td}>{dateText(r.requestedAt)}</td><td style={td}>{r.itemName}</td><td style={td}>{fmt(r.quantity)} {r.uom}</td><td style={td}>{r.requestedBy}</td><td style={td}>{r.purpose}</td><td style={td}>{r.status}</td><td style={td}>{r.status==='Pending'&&<><button disabled={busy} style={buttonStyle} onClick={()=>decideRequest(r,true)}>Approve</button>{' '}<button disabled={busy} style={secondaryStyle} onClick={()=>decideRequest(r,false)}>Reject</button></>}{r.status==='Approved'&&<button disabled={busy} style={buttonStyle} onClick={()=>releaseRequest(r)}>Release stock</button>}</td></tr>))}{!requests.length&&<p>No requests yet.</p>}</div>
+        {section==='Gate Pass' && <div style={{display:'grid',gridTemplateColumns:'minmax(300px,.8fr) minmax(400px,1.5fr)',gap:16,alignItems:'start'}}>
+          <form onSubmit={saveGatepass} style={cardStyle}><h3 style={{marginTop:0}}>Create gate pass request</h3><div style={{display:'grid',gap:11}}>
+            <label style={{display:'grid',gap:6,fontSize:13,color:'#526174'}}>Item<select style={inputStyle} value={gateForm.itemId} onChange={e=>updateField(setGateForm,'itemId',e.target.value)}><option value="">Select item</option>{items.map(i=><option key={i.id} value={i.id}>{i.name} (On hand: {fmt(i.stockOnHand)})</option>)}</select></label>
+            {field('Quantity','quantity',gateForm.quantity,setGateForm,'number')}{field('Recipient','recipient',gateForm.recipient,setGateForm)}{field('Purpose','purpose',gateForm.purpose,setGateForm)}{field('Reference','reference',gateForm.reference,setGateForm)}<button disabled={busy||!items.length} style={buttonStyle}>Save gate pass</button>
+          </div></form>
+          <div style={cardStyle}><h3 style={{marginTop:0}}>Gate pass register</h3><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Date','Item','Qty','Recipient','Purpose','Status'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{gatepasses.map(g=><tr key={g.id}><td style={td}>{dateText(g.createdAt)}</td><td style={td}>{g.itemName}</td><td style={td}>{fmt(g.quantity)} {g.uom}</td><td style={td}>{g.recipient}</td><td style={td}>{g.purpose}</td><td style={td}>{g.status}</td></tr>)}</tbody></table>{!gatepasses.length&&<p style={{color:'#718096'}}>No gate pass requests yet.</p>}</div></div>
         </div>}
-        {section==='Issuance'&&<div style={cardStyle}><h3>Direct stock issuance</h3><p style={{color:'#718096'}}>Use for authorized walk-in releases. For requests, approve them under Requests & Approval first.</p><form onSubmit={e=>saveMovement('ISSUANCE',e)} style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:10}}><label>Item<select required style={inputStyle} value={movement.itemId} onChange={e=>updateField(setMovement,'itemId',e.target.value)}><option value="">Select item</option>{activeItems.map(i=><option key={i.id} value={i.id}>{i.name} · {fmt(i.stockOnHand)} {i.uom}</option>)}</select></label>{field('Quantity *','quantity',movement.quantity,setMovement,'number')}{field('RIS / reference','reference',movement.reference,setMovement)}{field('Recipient / remarks','remarks',movement.remarks,setMovement)}<button disabled={busy} style={buttonStyle}>Post issuance</button></form></div>}
-        {section==='Stock Adjustment'&&<div style={{...cardStyle,maxWidth:650}}><h3>Stock balance adjustment</h3><p style={{color:'#718096'}}>Use only for verified physical-count corrections. Every adjustment is logged.</p><form onSubmit={adjustStock} style={{display:'grid',gap:11}}><label>Item<select required style={inputStyle} value={adjustForm.itemId} onChange={e=>updateField(setAdjustForm,'itemId',e.target.value)}><option value="">Select item</option>{activeItems.map(i=><option key={i.id} value={i.id}>{i.name} · Current {fmt(i.stockOnHand)}</option>)}</select></label>{field('New verified balance *','newBalance',adjustForm.newBalance,setAdjustForm,'number')}{field('Reason / physical count reference *','reason',adjustForm.reason,setAdjustForm)}<button disabled={busy} style={buttonStyle}>Save adjustment</button></form></div>}
-        {section==='Tools & Equipment'&&<div style={{display:'grid',gridTemplateColumns:'minmax(280px,.8fr) minmax(400px,1.4fr)',gap:14,alignItems:'start'}}>
-          <div style={{display:'grid',gap:12}}><form onSubmit={saveEquipment} style={cardStyle}><h3>Add equipment</h3><div style={{display:'grid',gap:9}}>{field('Equipment name *','name',equipmentForm.name,setEquipmentForm)}{field('Brand','brand',equipmentForm.brand,setEquipmentForm)}{field('Model / specification','model',equipmentForm.model,setEquipmentForm)}{field('Serial number','serialNumber',equipmentForm.serialNumber,setEquipmentForm)}{field('Quantity','quantity',equipmentForm.quantity,setEquipmentForm,'number')}{selectField('Condition','condition',equipmentForm.condition,setEquipmentForm,['Good','For repair','Under maintenance','Unserviceable'])}{field('Assigned to','assignedTo',equipmentForm.assignedTo,setEquipmentForm)}{field('Location','location',equipmentForm.location,setEquipmentForm)}<button style={buttonStyle}>Save equipment</button></div></form>
-          <form onSubmit={saveMaintenance} style={cardStyle}><h3>Log maintenance</h3><div style={{display:'grid',gap:9}}><label>Equipment<select required style={inputStyle} value={maintenanceForm.equipmentId} onChange={e=>updateField(setMaintenanceForm,'equipmentId',e.target.value)}><option value="">Select equipment</option>{equipment.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>{field('Activity *','activity',maintenanceForm.activity,setMaintenanceForm)}{field('Remarks','remarks',maintenanceForm.remarks,setMaintenanceForm)}{field('Next due','nextDue',maintenanceForm.nextDue,setMaintenanceForm,'date')}<button style={buttonStyle}>Save maintenance log</button></div></form></div>
-          <div style={cardStyle}><h3>Equipment register</h3>{table(['Equipment','Brand / Model','Serial','Qty','Condition','Assigned to','Location'],equipment.map(x=><tr key={x.id}><td style={td}>{x.name}</td><td style={td}>{[x.brand,x.model].filter(Boolean).join(' / ')||'—'}</td><td style={td}>{x.serialNumber||'—'}</td><td style={td}>{x.quantity}</td><td style={td}>{x.condition}</td><td style={td}>{x.assignedTo||'—'}</td><td style={td}>{x.location||'—'}</td></tr>))}</div>
-          <div style={{...cardStyle,gridColumn:'1 / -1'}}><h3>Maintenance history</h3>{table(['Date','Equipment','Activity','Remarks','Next due','Encoded by'],maintenance.map(m=><tr key={m.id}><td style={td}>{dateText(m.createdAt)}</td><td style={td}>{m.equipmentName}</td><td style={td}>{m.activity}</td><td style={td}>{m.remarks}</td><td style={td}>{m.nextDue||'—'}</td><td style={td}>{m.createdBy}</td></tr>))}</div>
-        </div>}
-        {section==='Gate Pass'&&<div style={{display:'grid',gridTemplateColumns:'minmax(270px,.7fr) minmax(420px,1.5fr)',gap:14,alignItems:'start'}}>
-          <form onSubmit={saveGate} style={cardStyle}><h3>Create gate pass</h3><div style={{display:'grid',gap:10}}><label>Item<select required style={inputStyle} value={gateForm.itemId} onChange={e=>updateField(setGateForm,'itemId',e.target.value)}><option value="">Select item</option>{activeItems.map(i=><option key={i.id} value={i.id}>{i.name} · {fmt(i.stockOnHand)}</option>)}</select></label>{field('Quantity *','quantity',gateForm.quantity,setGateForm,'number')}{field('Recipient *','recipient',gateForm.recipient,setGateForm)}{field('Purpose *','purpose',gateForm.purpose,setGateForm)}{field('Reference','reference',gateForm.reference,setGateForm)}<button style={buttonStyle}>Submit gate pass</button></div></form>
-          <div style={cardStyle}><h3>Gate pass register</h3>{table(['Date','Item','Qty','Recipient','Purpose','Status','Action'],gatepasses.map(g=><tr key={g.id}><td style={td}>{dateText(g.createdAt)}</td><td style={td}>{g.itemName}</td><td style={td}>{fmt(g.quantity)} {g.uom}</td><td style={td}>{g.recipient}</td><td style={td}>{g.purpose}</td><td style={td}>{g.status}</td><td style={td}>{g.status==='Pending approval'&&<><button style={buttonStyle} onClick={()=>decideGate(g,true)}>Approve</button>{' '}<button style={secondaryStyle} onClick={()=>decideGate(g,false)}>Reject</button></>}{g.status==='Approved'&&<button style={buttonStyle} onClick={()=>releaseGate(g)}>Release</button>}</td></tr>))}</div>
-        </div>}
-        {section==='Reports'&&<div style={cardStyle}><div style={{display:'flex',justifyContent:'space-between',gap:10,flexWrap:'wrap'}}><h3>Warehouse reports & audit trail</h3><button style={buttonStyle} onClick={()=>exportCsv('warehouse-stock-movements.csv',[['Date','Type','Item','Quantity','UOM','Balance before','Balance after','Reference','Remarks','User'],...transactions.map(t=>[dateText(t.createdAt),t.type,t.itemName,t.quantity,t.uom,t.balanceBefore,t.balanceAfter,t.reference,t.remarks,t.createdBy])])}>Export movement CSV</button></div><p>Active inventory: <b>{items.filter(i=>!i.archived).length}</b> · Low stock: <b>{lowStock.length}</b> · Receiving: <b>{transactions.filter(t=>t.type==='RECEIVING').length}</b> · Issuance: <b>{transactions.filter(t=>t.type==='ISSUANCE').length}</b> · Adjustments: <b>{transactions.filter(t=>t.type==='ADJUSTMENT').length}</b></p><h4>Stock movement audit trail</h4>{table(['Date','Type','Item','Qty','Before','After','Reference','Remarks','Encoded by'],transactions.map(t=><tr key={t.id}><td style={td}>{dateText(t.createdAt)}</td><td style={td}>{t.type}</td><td style={td}>{t.itemName}</td><td style={td}>{fmt(t.quantity)} {t.uom||''}</td><td style={td}>{fmt(t.balanceBefore)}</td><td style={td}>{fmt(t.balanceAfter)}</td><td style={td}>{t.reference||'—'}</td><td style={td}>{t.remarks||'—'}</td><td style={td}>{t.createdBy}</td></tr>))}</div>}
+        {section==='Reports' && <div style={cardStyle}><h3 style={{marginTop:0}}>Warehouse activity report</h3><p>Low-stock items: <b>{lowStock.length}</b> · Receiving entries: <b>{transactions.filter(t=>t.type==='RECEIVING').length}</b> · Issuance entries: <b>{transactions.filter(t=>t.type==='ISSUANCE').length}</b></p><h4>Low-stock watchlist</h4>{lowStock.length?lowStock.map(i=><div key={i.id} style={{padding:'9px 0',borderBottom:'1px solid #eef1f5'}}>{i.name} — {fmt(i.stockOnHand)} {i.uom} remaining (reorder level: {fmt(i.reorderLevel)})</div>):<p>Walang item below reorder level.</p>}<h4 style={{marginTop:22}}>Recent stock movements</h4><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Date','Type','Item','Qty','Balance after','Reference','Encoded by'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{transactions.slice(0,100).map(t=><tr key={t.id}><td style={td}>{dateText(t.createdAt)}</td><td style={td}>{t.type}</td><td style={td}>{t.itemName}</td><td style={td}>{fmt(t.quantity)} {t.uom}</td><td style={td}>{fmt(t.balanceAfter)}</td><td style={td}>{t.reference||'—'}</td><td style={td}>{t.createdBy}</td></tr>)}</tbody></table>{!transactions.length&&<p>No stock movements recorded.</p>}</div></div>}
       </>}
-      <div style={{marginTop:18,color:'#718096',fontSize:12}}>Signed in as {user.email} · Firestore live sync · All stock movements are recorded with user and timestamp.</div>
+      <div style={{marginTop:18,color:'#718096',fontSize:12}}>Signed in as {user.email} · Live Firestore connection · Records update automatically</div>
     </div>
   </div>
 }
+
 
 function Kpi({icon:Icon,label,value,note,tone,trend:tag}) {
   return (
