@@ -4,15 +4,12 @@ import {
   Activity, AlertCircle, ArrowDownRight, ArrowUpRight, Bell, Boxes, Building2,
   CalendarDays, CheckCircle2, ChevronDown, ChevronRight, CircleDollarSign,
   ClipboardList, Download, FileCheck2, FileSpreadsheet, Filter, LayoutDashboard,
-  LogOut, Menu, PackageCheck, Search, Settings2, ShieldCheck, Truck, Wallet, X, Warehouse, Wrench, Plus, ArrowDownToLine, ArrowUpFromLine
+  Menu, PackageCheck, Search, Settings2, ShieldCheck, Truck, Wallet, X, Warehouse, Wrench, Plus, ArrowDownToLine, ArrowUpFromLine
 } from 'lucide-react'
 import {
   Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis
 } from 'recharts'
-import {
-  browserLocalPersistence, onAuthStateChanged, setPersistence, signInWithPopup, signOut
-} from 'firebase/auth'
-import { auth, googleProvider, db } from './firebase'
+import { db } from './firebase'
 import { addDoc, collection, doc, onSnapshot, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore'
 
 const nav = [
@@ -103,10 +100,10 @@ function summarizeStatuses(records) {
 }
 
 function App() {
-  const [user, setUser] = useState(null)
-  const [authLoading, setAuthLoading] = useState(true)
-  const [loginLoading, setLoginLoading] = useState(false)
-  const [authError, setAuthError] = useState('')
+  const user = {
+    email: 'Public Access',
+    displayName: 'SEAOIL Mabini Terminal'
+  }
 
   const [active, setActive] = useState('Overview')
   const [workspace, setWorkspace] = useState(() => localStorage.getItem('mabini-active-workspace') || '')
@@ -114,24 +111,20 @@ function App() {
   const [period, setPeriod] = useState('2026')
   const [mobileOpen, setMobileOpen] = useState(false)
 
-  // Google Sheets live-data connection
+  // Public, read-only Google Sheets connection
   const [liveData, setLiveData] = useState(null)
   const [dataLoading, setDataLoading] = useState(false)
   const [dataError, setDataError] = useState('')
   const [lastSync, setLastSync] = useState(null)
 
-  const fetchLiveData = async (currentUser) => {
+  const fetchLiveData = async () => {
     setDataLoading(true)
     setDataError('')
 
     try {
-      const token = await currentUser.getIdToken()
       const response = await fetch(
         'https://mabini-terminal-api.jhun-maranan.workers.dev/api/sheets',
-        {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${token}` }
-        }
+        { method: 'GET' }
       )
 
       const result = await response.json()
@@ -150,62 +143,10 @@ function App() {
   }
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async currentUser => {
-      if (!currentUser) {
-        setUser(null)
-        setAuthLoading(false)
-        return
-      }
-
-      const email = currentUser.email?.toLowerCase() || ''
-
-      if (!email.endsWith('@seaoil.com.ph')) {
-        await signOut(auth)
-        setUser(null)
-        setAuthError('Access denied. Please use your authorized @seaoil.com.ph account.')
-        setAuthLoading(false)
-        return
-      }
-
-      setUser(currentUser)
-      setAuthError('')
-      setAuthLoading(false)
-      await fetchLiveData(currentUser)
-    })
-
-    return unsubscribe
+    fetchLiveData()
+    const refresh = setInterval(fetchLiveData, 60000)
+    return () => clearInterval(refresh)
   }, [])
-
-  const handleGoogleLogin = async () => {
-    setLoginLoading(true)
-    setAuthError('')
-
-    try {
-      await setPersistence(auth, browserLocalPersistence)
-      const result = await signInWithPopup(auth, googleProvider)
-      const email = result.user.email?.toLowerCase() || ''
-
-      if (!email.endsWith('@seaoil.com.ph')) {
-        await signOut(auth)
-        setAuthError('Access denied. Only @seaoil.com.ph accounts are allowed.')
-      }
-    } catch (error) {
-      setAuthError(
-        error.code === 'auth/popup-closed-by-user'
-          ? 'Sign-in was cancelled. Please try again.'
-          : error.message || 'Unable to sign in. Please try again.'
-      )
-    } finally {
-      setLoginLoading(false)
-    }
-  }
-
-  const handleLogout = async () => {
-    await signOut(auth)
-    localStorage.removeItem('mabini-active-workspace')
-    setWorkspace('')
-    setActive('Overview')
-  }
 
   const liveRqRows = useMemo(() => parseRqRows(liveData?.rq), [liveData])
   const displayedRows = liveData ? liveRqRows : rows
@@ -223,61 +164,6 @@ function App() {
   )
 
   const isOverview = active === 'Overview'
-
-  if (authLoading) {
-    return (
-      <div style={loginPage}>
-        <div style={loginCard}>
-          <div style={loginLogo}><Activity size={28}/></div>
-          <h2>SEAOIL Mabini Terminal</h2>
-          <p>Checking secure access...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (!user) {
-    return (
-      <div style={loginPage}>
-        <div style={loginCard}>
-          <div style={loginLogo}><Activity size={30}/></div>
-          <div style={{ color: '#477fce', fontSize: 11, fontWeight: 800, letterSpacing: 2 }}>
-            SEAOIL PHILIPPINES
-          </div>
-          <h1 style={{ fontSize: 25, color: '#172b46', margin: '12px 0 8px' }}>
-            Mabini Terminal
-          </h1>
-          <p style={{ color: '#718096', fontSize: 14, marginBottom: 28 }}>
-            Centralized Operations Monitoring System
-          </p>
-
-          <button
-            onClick={handleGoogleLogin}
-            disabled={loginLoading}
-            style={loginButton}
-          >
-            {loginLoading ? 'Signing in...' : 'Sign in with Google'}
-          </button>
-
-          {authError && (
-            <div style={{
-              marginTop: 18, padding: 12, borderRadius: 8,
-              background: '#fff1f0', color: '#b42318', fontSize: 13
-            }}>
-              {authError}
-            </div>
-          )}
-
-          <p style={{ fontSize: 12, color: '#8995a5', marginTop: 25 }}>
-            Authorized company accounts only
-          </p>
-          <p style={{ fontSize: 12, color: '#8995a5' }}>
-            @seaoil.com.ph
-          </p>
-        </div>
-      </div>
-    )
-  }
 
   const chooseWorkspace = value => {
     localStorage.setItem('mabini-active-workspace', value)
@@ -308,13 +194,22 @@ function App() {
           </button>
         </div>
         <div style={{ marginTop: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', color: '#718096', fontSize: 12 }}>
-          <span>Signed in as {user.email}</span><button onClick={handleLogout} style={{ border: 0, background: 'transparent', color: '#526174', fontWeight: 700, cursor: 'pointer' }}>Sign out</button>
+          <span>Public dashboard access · Read-only data connection</span>
         </div>
       </div>
     </div>
   )
 
-  if (workspace === 'warehouse') return <WarehouseWorkspace user={user} onBack={() => { localStorage.removeItem('mabini-active-workspace'); setWorkspace('') }} />
+  if (workspace === 'warehouse') return (
+    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f3f6fa', fontFamily: 'Nunito, sans-serif' }}>
+      <div style={{ maxWidth: 560, padding: 30, borderRadius: 16, background: '#fff', boxShadow: '0 12px 40px rgba(20,40,70,.08)', textAlign: 'center' }}>
+        <Warehouse size={36} color="#2869b2" />
+        <h2 style={{ color: '#172b46' }}>Warehouse Management</h2>
+        <p style={{ color: '#718096', lineHeight: 1.6 }}>This workspace uses a protected Firestore database and is not enabled in public mode. Operations Monitoring is available without sign-in.</p>
+        <button onClick={() => { localStorage.removeItem('mabini-active-workspace'); setWorkspace('') }} style={{ border: 0, borderRadius: 8, background: '#2869b2', color: '#fff', padding: '11px 18px', fontWeight: 700, cursor: 'pointer' }}>Back to dashboard selection</button>
+      </div>
+    </div>
+  )
 
   return (
     <div className="app-shell">
@@ -363,9 +258,6 @@ function App() {
           <div className="user-profile">
             <div className="avatar">MT</div>
             <div><b>{user.displayName || 'SEAOIL User'}</b><small>{user.email}</small></div>
-            <button onClick={handleLogout} title="Sign out" style={{ border: 0, background: 'transparent', cursor: 'pointer', color: 'inherit' }}>
-              <LogOut size={17}/>
-            </button>
           </div>
         </div>
       </aside>
@@ -492,7 +384,7 @@ function OperationsModule({ active, liveData, liveRqRows, query, setQuery, money
     'RQ / PO Monitoring': { title: 'RQ / PO Monitoring', description: 'Requisition and purchase order records from the connected workbook.', keys: ['rq'], headers: ['RQ No.', 'Date', 'Description', 'Supplier', 'PO No.', 'Amount', 'Status'] },
     'EPR Monitoring': { title: 'EPR Monitoring', description: 'EPR records from the connected workbook.', keys: ['epr'], headers: null },
     'SDCI Monitoring': { title: 'SDCI Monitoring', description: 'SDCI records from the connected workbook.', keys: ['sdci'], headers: null },
-    'For Approval': { title: 'For Approval', description: 'Records listed in the approval worksheet. Review status here; approval actions are not enabled in this view.', keys: ['forApproval', 'approval'], headers: null },
+    'For Approval': { title: 'For Approval', description: 'Records listed in the approval worksheet. Review status here; approval actions are not enabled in this view.', keys: ['approvals', 'forApproval', 'approval'], headers: null },
     'Reference & Item Master': { title: 'Reference & Item Master', description: 'Reference and item master data from the connected workbook.', keys: ['sheet4', 'reference', 'itemMaster'], headers: null }
   }
   const cfg = config[active] || config['RQ / PO Monitoring']
@@ -650,7 +542,7 @@ function WarehouseWorkspace({ user, onBack }) {
         </div>}
         {section==='Reports' && <div style={cardStyle}><h3 style={{marginTop:0}}>Warehouse activity report</h3><p>Low-stock items: <b>{lowStock.length}</b> · Receiving entries: <b>{transactions.filter(t=>t.type==='RECEIVING').length}</b> · Issuance entries: <b>{transactions.filter(t=>t.type==='ISSUANCE').length}</b></p><h4>Low-stock watchlist</h4>{lowStock.length?lowStock.map(i=><div key={i.id} style={{padding:'9px 0',borderBottom:'1px solid #eef1f5'}}>{i.name} — {fmt(i.stockOnHand)} {i.uom} remaining (reorder level: {fmt(i.reorderLevel)})</div>):<p>Walang item below reorder level.</p>}<h4 style={{marginTop:22}}>Recent stock movements</h4><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Date','Type','Item','Qty','Balance after','Reference','Encoded by'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{transactions.slice(0,100).map(t=><tr key={t.id}><td style={td}>{dateText(t.createdAt)}</td><td style={td}>{t.type}</td><td style={td}>{t.itemName}</td><td style={td}>{fmt(t.quantity)} {t.uom}</td><td style={td}>{fmt(t.balanceAfter)}</td><td style={td}>{t.reference||'—'}</td><td style={td}>{t.createdBy}</td></tr>)}</tbody></table>{!transactions.length&&<p>No stock movements recorded.</p>}</div></div>}
       </>}
-      <div style={{marginTop:18,color:'#718096',fontSize:12}}>Signed in as {user.email} · Live Firestore connection · Records update automatically</div>
+      <div style={{marginTop:18,color:'#718096',fontSize:12}}>Public access · Warehouse database requires separate authorization</div>
     </div>
   </div>
 }
@@ -667,27 +559,5 @@ function Kpi({icon:Icon,label,value,note,tone,trend:tag}) {
   )
 }
 
-const loginPage = {
-  minHeight: '100vh', display: 'flex', alignItems: 'center',
-  justifyContent: 'center', background: '#f3f6fa', padding: 20
-}
-
-const loginCard = {
-  width: '100%', maxWidth: 430, background: '#fff', padding: '42px 35px',
-  borderRadius: 16, boxShadow: '0 12px 40px rgba(20,40,70,.10)',
-  textAlign: 'center', fontFamily: 'Nunito, sans-serif'
-}
-
-const loginLogo = {
-  width: 58, height: 58, borderRadius: 16, background: '#eaf2ff',
-  color: '#2869b2', display: 'flex', alignItems: 'center',
-  justifyContent: 'center', margin: '0 auto 22px'
-}
-
-const loginButton = {
-  width: '100%', padding: '14px 18px', border: 0, borderRadius: 9,
-  background: '#2869b2', color: '#fff', fontSize: 15,
-  fontWeight: 700, cursor: 'pointer'
-}
 
 export default App
