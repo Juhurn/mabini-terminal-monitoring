@@ -116,6 +116,9 @@ function App() {
   const [dataLoading, setDataLoading] = useState(false)
   const [dataError, setDataError] = useState('')
   const [lastSync, setLastSync] = useState(null)
+  const [inventoryData, setInventoryData] = useState(null)
+  const [inventoryLoading, setInventoryLoading] = useState(false)
+  const [inventoryError, setInventoryError] = useState('')
 
   const fetchLiveData = async () => {
     setDataLoading(true)
@@ -142,9 +145,24 @@ function App() {
     }
   }
 
+  const fetchInventoryData = async () => {
+    setInventoryLoading(true)
+    setInventoryError('')
+    try {
+      const response = await fetch('https://mabini-terminal-api.jhun-maranan.workers.dev/api/inventory')
+      const result = await response.json()
+      if (!response.ok || !result.success) throw new Error(result.error || 'Unable to load inventory data.')
+      setInventoryData(result.data)
+    } catch (error) {
+      console.error('Inventory sync error:', error)
+      setInventoryError(error.message || 'Inventory synchronization failed.')
+    } finally { setInventoryLoading(false) }
+  }
+
   useEffect(() => {
     fetchLiveData()
-    const refresh = setInterval(fetchLiveData, 60000)
+    fetchInventoryData()
+    const refresh = setInterval(() => { fetchLiveData(); fetchInventoryData() }, 60000)
     return () => clearInterval(refresh)
   }, [])
 
@@ -176,8 +194,9 @@ function App() {
       <div style={{ width: 'min(900px, 100%)', background: '#fff', borderRadius: 22, padding: 32, boxShadow: '0 16px 50px rgba(20,40,70,.10)' }}>
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{ color: '#477fce', fontSize: 11, fontWeight: 800, letterSpacing: 2 }}>SEAOIL PHILIPPINES · MABINI TERMINAL</div>
-          <h1 style={{ color: '#172b46', margin: '10px 0 6px' }}>Choose your dashboard</h1>
-          <p style={{ color: '#718096', margin: 0 }}>Select the workspace you want to open. Your selection will be remembered on this browser.</p>
+          <h1 style={{ color: '#172b46', margin: '10px 0 6px', fontSize: 34 }}>Mabini Terminal</h1>
+          <h2 style={{ color: '#526174', margin: '0 0 8px', fontSize: 17, fontWeight: 700 }}>Choose your dashboard</h2>
+          <p style={{ color: '#718096', margin: 0 }}>SEAOIL Philippines · Centralized Terminal Monitoring System</p>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 18 }}>
           <button onClick={() => chooseWorkspace('operations')} style={{ textAlign: 'left', padding: 24, border: '1px solid #dbe6f2', borderRadius: 16, background: '#f7faff', cursor: 'pointer', color: '#172b46' }}>
@@ -192,6 +211,12 @@ function App() {
             <p style={{ color: '#718096', margin: 0, lineHeight: 1.6 }}>Inventory, receiving, issuance, approvals, equipment, and gate pass.</p>
             <div style={{ marginTop: 18, color: '#16875d', fontWeight: 800 }}>Open Warehouse →</div>
           </button>
+          <button onClick={() => chooseWorkspace('inventory')} style={{ textAlign: 'left', padding: 24, border: '1px solid #f0dfbd', borderRadius: 16, background: '#fffbf3', cursor: 'pointer', color: '#172b46' }}>
+            <div style={{ width: 48, height: 48, display: 'grid', placeItems: 'center', borderRadius: 13, background: '#fff0d4', color: '#b7791f' }}><Boxes size={25}/></div>
+            <h2 style={{ margin: '18px 0 6px' }}>Mabini Daily Inventory Summary</h2>
+            <p style={{ color: '#718096', margin: 0, lineHeight: 1.6 }}>Daily product stocks, tank levels, available inventory, ullage, and historical trends.</p>
+            <div style={{ marginTop: 18, color: '#a66b12', fontWeight: 800 }}>Open Daily Inventory →</div>
+          </button>
         </div>
         <div style={{ marginTop: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', color: '#718096', fontSize: 12 }}>
           <span>Public dashboard access · Read-only data connection</span>
@@ -199,6 +224,8 @@ function App() {
       </div>
     </div>
   )
+
+  if (workspace === 'inventory') return <InventoryWorkspace data={inventoryData} loading={inventoryLoading} error={inventoryError} onRefresh={fetchInventoryData} onBack={() => { localStorage.removeItem('mabini-active-workspace'); setWorkspace('') }} />
 
   if (workspace === 'warehouse') return (
     <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24, background: '#f3f6fa', fontFamily: 'Nunito, sans-serif' }}>
@@ -547,6 +574,47 @@ function WarehouseWorkspace({ user, onBack }) {
   </div>
 }
 
+
+
+function InventoryWorkspace({ data, loading, error, onRefresh, onBack }) {
+  const tabs = data?.tabs || []
+  const parseTab = tab => {
+    const values = tab?.values || []
+    const rows = values.slice(2).filter(r => Array.isArray(r) && r[0] !== undefined && r[1] !== undefined && !String(r[0]).toUpperCase().includes('TOTAL'))
+    return rows.map(r => ({ tank:String(r[0] ?? ''), product:String(r[1] ?? '').trim(), total:Number(r[2]) || 0, deadstock:Number(r[3]) || 0, available:Number(r[4]) || 0, capacity:Number(r[5]) || 0, safeCapacity:Number(r[6]) || 0, ullage:Number(r[7]) || 0, dailySales:Number(r[8]) || 0, days:Number(r[9]) || 0, status:String(r[10] ?? '') })).filter(r => r.tank && r.product && Number.isFinite(r.total))
+  }
+  const parsed = tabs.map(t => ({ name:t.name, rows:parseTab(t) }))
+  const latest = parsed[0] || {name:'No data',rows:[]}
+  const products = [...new Set(latest.rows.map(r=>r.product))]
+  const total = latest.rows.reduce((s,r)=>s+r.total,0)
+  const available = latest.rows.reduce((s,r)=>s+r.available,0)
+  const deadstock = latest.rows.reduce((s,r)=>s+r.deadstock,0)
+  const fmt = n => Number(n || 0).toLocaleString('en-PH',{maximumFractionDigits:3})
+  const card = {background:'#fff',border:'1px solid #e5eaf0',borderRadius:14,padding:18,boxShadow:'0 3px 12px rgba(20,40,70,.04)'}
+  const tableHead = {textAlign:'left',padding:'11px 10px',color:'#718096',fontSize:11,borderBottom:'1px solid #e8edf3',whiteSpace:'nowrap'}
+  const cell = {padding:'11px 10px',borderBottom:'1px solid #eef1f5',fontSize:13,color:'#26384d',whiteSpace:'nowrap'}
+  const trend = parsed.slice().reverse().map(t=>({date:t.name, total:t.rows.reduce((s,r)=>s+r.total,0), available:t.rows.reduce((s,r)=>s+r.available,0)}))
+  return <div style={{minHeight:'100vh',background:'#f3f6fa',padding:24,fontFamily:'Nunito, sans-serif',color:'#172b46'}}>
+    <div style={{maxWidth:1450,margin:'0 auto'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap',marginBottom:22}}>
+        <div><div style={{fontSize:11,letterSpacing:2,color:'#477fce',fontWeight:800}}>SEAOIL PHILIPPINES / MABINI TERMINAL</div><h1 style={{margin:'7px 0',fontSize:28}}>Mabini Daily Inventory Summary</h1><div style={{color:'#718096',fontSize:13}}>Latest daily stock position and historical tank inventory</div></div>
+        <div style={{display:'flex',gap:8}}><button onClick={onRefresh} style={{border:'1px solid #cbd8e8',borderRadius:8,background:'#fff',color:'#2869b2',padding:'10px 14px',fontWeight:700,cursor:'pointer'}}>↻ Refresh</button><button onClick={onBack} style={{border:0,borderRadius:8,background:'#2869b2',color:'#fff',padding:'10px 14px',fontWeight:700,cursor:'pointer'}}>← All dashboards</button></div>
+      </div>
+      {error && <div style={{...card,background:'#fff1f0',color:'#b42318',marginBottom:14}}>{error}</div>}
+      {loading && !data ? <div style={card}>Loading daily inventory from Google Sheets…</div> : !latest.rows.length ? <div style={card}>No inventory records returned. Check the inventory worksheet tabs and Worker mapping.</div> : <>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:12,marginBottom:16}}>
+          {[['Latest report',latest.name],['Total inventory',fmt(total)],['Available inventory',fmt(available)],['Deadstock volume',fmt(deadstock)],['Tank / skid records',latest.rows.length]].map(([k,v])=><div key={k} style={card}><div style={{fontSize:12,color:'#718096'}}>{k}</div><div style={{fontSize:25,fontWeight:800,marginTop:7}}>{v}</div></div>)}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:14,marginBottom:16}}>
+          {products.map(product=>{const list=latest.rows.filter(r=>r.product===product);const qty=list.reduce((s,r)=>s+r.total,0);const cap=list.reduce((s,r)=>s+r.safeCapacity,0);const pct=cap>0?Math.min(100,Math.max(0,qty/cap*100)):0;return <div key={product} style={card}><div style={{display:'flex',justifyContent:'space-between',gap:8}}><b>{product}</b><b>{fmt(qty)}</b></div><div style={{height:13,background:'#edf1f5',borderRadius:20,overflow:'hidden',margin:'14px 0 8px'}}><div style={{height:'100%',width:`${pct}%`,background:'#2c83c7',borderRadius:20}}/></div><div style={{fontSize:12,color:'#718096'}}>{list.length} tank/skid record(s) · {cap ? `${pct.toFixed(1)}% of safe capacity` : 'Safe capacity not available'}</div></div>})}
+        </div>
+        <div style={{...card,marginBottom:16}}><h3 style={{marginTop:0}}>Tank inventory details · {latest.name}</h3><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Tank / Skid','Product','Total Inventory','Deadstock','Available','Max Capacity','Safe Capacity','Ullage','Days Inventory','Status'].map(h=><th key={h} style={tableHead}>{h}</th>)}</tr></thead><tbody>{latest.rows.map((r,i)=><tr key={`${r.tank}-${i}`}><td style={cell}><b>{r.tank}</b></td><td style={cell}>{r.product}</td><td style={cell}>{fmt(r.total)}</td><td style={cell}>{fmt(r.deadstock)}</td><td style={cell}>{fmt(r.available)}</td><td style={cell}>{fmt(r.capacity)}</td><td style={cell}>{fmt(r.safeCapacity)}</td><td style={cell}>{fmt(r.ullage)}</td><td style={cell}>{r.days?fmt(r.days):'—'}</td><td style={cell}>{r.status||'—'}</td></tr>)}</tbody></table></div></div>
+        <div style={{...card,marginBottom:16}}><h3 style={{marginTop:0}}>Historical inventory trend</h3><div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr><th style={tableHead}>Report date</th><th style={tableHead}>Total inventory</th><th style={tableHead}>Available inventory</th><th style={tableHead}>Tank records</th></tr></thead><tbody>{trend.map(t=><tr key={t.date}><td style={cell}>{t.date}</td><td style={cell}>{fmt(t.total)}</td><td style={cell}>{fmt(t.available)}</td><td style={cell}>{parsed.find(p=>p.name===t.date)?.rows.length || 0}</td></tr>)}</tbody></table></div></div>
+        <div style={{fontSize:12,color:'#718096'}}>Source: connected Mabini Daily Inventory Google Sheet · Auto-refresh every 60 seconds · Values shown as recorded in the source workbook; units are not assumed.</div>
+      </>}
+    </div>
+  </div>
+}
 
 function Kpi({icon:Icon,label,value,note,tone,trend:tag}) {
   return (
