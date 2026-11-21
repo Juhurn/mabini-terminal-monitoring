@@ -7,7 +7,7 @@ import {
   Menu, PackageCheck, Search, Settings2, ShieldCheck, Truck, Wallet, X, Warehouse, Wrench, Plus, ArrowDownToLine, ArrowUpFromLine
 } from 'lucide-react'
 import {
-  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis
+  Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis
 } from 'recharts'
 import { db } from './firebase'
 import { addDoc, collection, doc, onSnapshot, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore'
@@ -721,7 +721,7 @@ function InventoryWorkspace({ data, loading, error, onRefresh, onBack }) {
           <button className={`inv-btn ${activePanel==='Inventory'?'primary':'dark'}`} onClick={()=>setActivePanel('Inventory')}>Daily Inventory Summary</button>
           <button className={`inv-btn ${activePanel==='Throughput'?'primary':'dark'}`} onClick={()=>setActivePanel('Throughput')}>Throughput Monitoring</button>
         </div>
-        {activePanel==='Throughput' && <ThroughputWorkspace data={throughputData} loading={throughputLoading} error={throughputError}/>}
+        {activePanel==='Throughput' && <ThroughputWorkspace data={throughputData} inventorySnapshots={parsed.map(t=>({date:(()=>{const m=String(t.name||'').trim().match(/^([A-Za-z]{3})\s+(\d{1,2})$/);return m?`2026-${String(monthOrder[m[1].toLowerCase()]||0).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`:''})(),name:t.name,tankRows:t.tankRows,summaryRows:t.summaryRows})).filter(t=>t.date).sort((a,b)=>a.date.localeCompare(b.date))} loading={throughputLoading} error={throughputError}/>}
         {activePanel==='Inventory' && <>
         {error && <div className="inv-error">{error}</div>}
         {loading && <div className="inv-alert">Loading inventory workbook…</div>}
@@ -765,54 +765,125 @@ function InventoryWorkspace({ data, loading, error, onRefresh, onBack }) {
     </div>
   )
 }
-function ThroughputWorkspace({ data, loading, error }) {
-  const [startDate, setStartDate] = useState('2026-01-01')
-  const [endDate, setEndDate] = useState('2026-12-31')
-  const [direction, setDirection] = useState('ALL')
-  const [product, setProduct] = useState('ALL')
-  const [channel, setChannel] = useState('ALL')
+function ThroughputWorkspace({ data, inventorySnapshots = [], loading, error }) {
+  const fmt = value => Number(value || 0).toLocaleString('en-PH', { minimumFractionDigits: 3, maximumFractionDigits: 3 })
+  const dateLabel = value => value ? new Date(value+'T00:00:00').toLocaleDateString('en-PH',{month:'short',day:'2-digit',year:'numeric'}) : '—'
+  const [previousDate, setPreviousDate] = useState('')
+  const [currentDate, setCurrentDate] = useState('')
+  const [productFilter, setProductFilter] = useState('ALL')
+  const [truckSalesMonth, setTruckSalesMonth] = useState('11')
   const records = data?.records || []
-  const fmt = value => Number(value || 0).toLocaleString('en-PH', { maximumFractionDigits: 3 })
-  const products = [...new Set(records.map(r=>r.product).filter(Boolean))].sort()
-  const channels = [...new Set(records.map(r=>r.channel).filter(Boolean))].sort()
-  const filtered = records.filter(r => r.date >= startDate && r.date <= endDate && (direction==='ALL'||r.direction===direction) && (product==='ALL'||r.product===product) && (channel==='ALL'||r.channel===channel))
-  const incoming = filtered.filter(r=>r.direction==='IN').reduce((s,r)=>s+Number(r.volume||0),0)
-  const outgoing = filtered.filter(r=>r.direction==='OUT').reduce((s,r)=>s+Number(r.volume||0),0)
-  const net = incoming-outgoing
-  const dailyMap = new Map()
-  filtered.forEach(r=>{ const item=dailyMap.get(r.date)||{date:r.date,incoming:0,outgoing:0}; item[r.direction==='IN'?'incoming':'outgoing']+=Number(r.volume||0); dailyMap.set(r.date,item) })
-  const daily = [...dailyMap.values()].sort((a,b)=>a.date.localeCompare(b.date))
-  const th={textAlign:'left',padding:'11px 10px',color:'#62748a',fontSize:11,borderBottom:'1px solid #e8eef5',whiteSpace:'nowrap'}
-  const td={padding:'10px',borderBottom:'1px solid #eef2f7',fontSize:12,color:'#20364d',verticalAlign:'top'}
+  const snapshots = inventorySnapshots.filter(x=>x.date && x.tankRows?.length)
+  useEffect(()=>{
+    if (snapshots.length) {
+      const newest=snapshots[snapshots.length-1]
+      const prior=snapshots.length>1?snapshots[snapshots.length-2]:newest
+      setPreviousDate(prior.date); setCurrentDate(newest.date)
+    }
+  },[snapshots.map(x=>x.date).join('|')])
+  const previous = snapshots.find(x=>x.date===previousDate)
+  const current = snapshots.find(x=>x.date===currentDate)
+  const norm = value => String(value||'').toUpperCase().replace(/[^A-Z0-9]/g,'')
+  const productGroup = value => {
+    const p=norm(value)
+    if (p.includes('RON88') || p==='R88' || p.includes('E10R88')) return 'RON88'
+    if (p.includes('RON92') || p==='R92' || p==='R91' || p.includes('R92R91')) return 'RON92'
+    if (p==='ADO' || p==='B2' || p==='B3' || p.includes('ADO') || p.includes('B3')) return 'ADO/B3'
+    if (p.includes('CME')) return 'CME'
+    if (p.includes('KERO')) return 'KERO'
+    if (p.includes('E98')) return 'E98'
+    if (p.includes('EX97') || p==='E97') return 'EX97'
+    if (p==='E95' || p==='EU' || p==='E10') return 'RON88/RON92 – verify blend'
+    return p
+  }
+  const getGroup = value => {
+    const p=norm(value)
+    if (p.includes('RON88') || p==='R88' || p.includes('E10R88')) return 'RON88'
+    if (p.includes('RON92') || p==='R92' || p==='R91' || p.includes('R92R91')) return 'RON92'
+    if (p==='ADO' || p==='B2' || p==='B3' || p.includes('ADO') || p.includes('B3')) return 'ADO/B3'
+    if (p.includes('CME')) return 'CME'
+    if (p.includes('KERO')) return 'KERO'
+    if (p.includes('E98')) return 'E98'
+    if (p.includes('EX97') || p==='E97') return 'EX97'
+    return p
+  }
+  const tankMap = rows => (rows||[]).map(r=>({...r,group:getGroup(r.product)}))
+  const beforeTanks=tankMap(previous?.tankRows), afterTanks=tankMap(current?.tankRows)
+  const tankKeys=[...new Set([...beforeTanks,...afterTanks].map(r=>`${r.tank}|${r.group}`))]
+  const tankChanges=tankKeys.map(key=>{
+    const [tank,group]=key.split('|'); const a=beforeTanks.find(x=>String(x.tank)===tank&&x.group===group); const b=afterTanks.find(x=>String(x.tank)===tank&&x.group===group)
+    return {tank,product:b?.product||a?.product||group,group,before:a?.total??null,after:b?.total??null,change:a&&b?b.total-a.total:null}
+  }).filter(x=>x.before!==null||x.after!==null)
+  const groupKeys=[...new Set([...beforeTanks,...afterTanks].map(r=>r.group))]
+  const productChanges=groupKeys.map(group=>{
+    const a=beforeTanks.filter(x=>x.group===group).reduce((s,x)=>s+x.total,0)
+    const b=afterTanks.filter(x=>x.group===group).reduce((s,x)=>s+x.total,0)
+    const inRows=records.filter(r=>r.direction==='IN' && r.date>=previousDate && r.date<=currentDate && getGroup(r.product)===group)
+    const outRows=records.filter(r=>r.direction==='OUT' && r.date>=previousDate && r.date<=currentDate && getGroup(r.product)===group)
+    const incoming=inRows.reduce((s,r)=>s+Number(r.volume||0),0), outgoing=outRows.reduce((s,r)=>s+Number(r.volume||0),0)
+    return {group,before:a,after:b,change:b-a,incoming,outgoing,net:incoming-outgoing,unexplained:(b-a)-(incoming-outgoing),transactions:[...inRows,...outRows].sort((x,y)=>x.date.localeCompare(y.date))}
+  }).sort((a,b)=>Math.abs(b.change)-Math.abs(a.change))
+  const shownProducts=productChanges.filter(x=>productFilter==='ALL'||x.group===productFilter)
+  const rangeRecords=records.filter(r=>r.date>=previousDate&&r.date<=currentDate&&(productFilter==='ALL'||getGroup(r.product)===productFilter)).sort((a,b)=>a.date.localeCompare(b.date))
+  const truckSalesRecords=records.filter(r=>r.direction==='OUT'&&r.channel==='Truck Sales'&&r.date>=previousDate&&r.date<=currentDate&&(productFilter==='ALL'||getGroup(r.product)===productFilter))
+  const truckSalesByDate=Object.values(truckSalesRecords.reduce((acc,r)=>{
+    if(!acc[r.date]) acc[r.date]={date:r.date,truckCount:0,_truckCountSet:false,total:0}
+    const row=acc[r.date]; row.total+=Number(r.volume||0); row[getGroup(r.product)]=(row[getGroup(r.product)]||0)+Number(r.volume||0)
+    if(!row._truckCountSet&&r.vesselTruck){const n=parseFloat(String(r.vesselTruck));if(Number.isFinite(n)){row.truckCount=n;row._truckCountSet=true}}
+    return acc
+  },{})).sort((a,b)=>a.date.localeCompare(b.date))
+  const truckSalesProducts=[...new Set(truckSalesRecords.map(r=>getGroup(r.product)))].sort()
+  const allTruckSalesRecords=records.filter(r=>r.direction==='OUT'&&r.channel==='Truck Sales'&&(productFilter==='ALL'||getGroup(r.product)===productFilter))
+  const monthNames=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  const monthlyTruckSales=monthNames.map((month,i)=>({month,monthKey:String(i+1).padStart(2,'0'),total:allTruckSalesRecords.filter(r=>r.date?.startsWith(`2026-${String(i+1).padStart(2,'0')}-`)).reduce((sum,r)=>sum+Number(r.volume||0),0)}))
+  const selectedMonthRecords=allTruckSalesRecords.filter(r=>r.date?.startsWith(`2026-${truckSalesMonth}-`))
+  const dailySelectedMonth=Object.values(selectedMonthRecords.reduce((acc,r)=>{const day=r.date.slice(8,10);if(!acc[day])acc[day]={day:Number(day),date:r.date,total:0};acc[day].total+=Number(r.volume||0);return acc},{})).sort((a,b)=>a.day-b.day)
+  const th={textAlign:'left',padding:'10px 9px',color:'#62748a',fontSize:11,borderBottom:'1px solid #e8eef5',whiteSpace:'nowrap'}
+  const td={padding:'10px 9px',borderBottom:'1px solid #eef2f7',fontSize:12,color:'#20364d',verticalAlign:'top'}
   const card={background:'#fff',border:'1px solid #e3ebf4',borderRadius:16,padding:16,boxShadow:'0 7px 22px rgba(0,48,91,.05)'}
-  if (loading) return <div className="inv-alert">Loading 2026 throughput records…</div>
+  const input={padding:9,border:'1px solid #dbe4ee',borderRadius:8,color:'#20364d',background:'#fff',width:'100%'}
+  if (loading) return <div className="inv-alert">Loading throughput records…</div>
   if (error) return <div className="inv-error">{error} Make sure <b>throughput-data.json</b> is uploaded inside the project's <b>public</b> folder.</div>
   if (!data) return <div className="inv-alert">No throughput data available.</div>
   return <div style={{display:'grid',gap:14}}>
     <div style={{...card,display:'flex',justifyContent:'space-between',gap:12,alignItems:'center',flexWrap:'wrap'}}>
-      <div><div style={{fontSize:11,letterSpacing:1.5,color:'#0879bd',fontWeight:800}}>2026 OPERATIONS DATA</div><h2 style={{margin:'5px 0',fontSize:22,color:'#003f70'}}>DAILY THROUGHPUT MONITORING</h2><div style={{fontSize:12,color:'#718096'}}>Incoming receipts, truck sales, vessel sales and depot transfers</div></div>
-      <div style={{fontSize:12,color:'#718096'}}>Source records: <b style={{color:'#003f70'}}>{fmt(data.metadata?.recordCount)}</b></div>
+      <div><div style={{fontSize:11,letterSpacing:1.5,color:'#0879bd',fontWeight:800}}>2026 INVENTORY INVESTIGATION</div><h2 style={{margin:'5px 0',fontSize:22,color:'#003f70'}}>VOLUME VARIANCE INVESTIGATION</h2><div style={{fontSize:12,color:'#718096'}}>Compare daily tank inventory changes against recorded throughput transactions.</div></div>
+      <div style={{fontSize:12,color:'#718096'}}>Throughput records: <b style={{color:'#003f70'}}>{fmt(data.metadata?.recordCount)}</b></div>
     </div>
+    <section style={{...card,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))',gap:12}}>
+      <label style={{fontSize:11,color:'#62748a',display:'grid',gap:5}}>PREVIOUS INVENTORY DATE<select value={previousDate} onChange={e=>setPreviousDate(e.target.value)} style={input}>{snapshots.map(x=><option key={x.date} value={x.date}>{dateLabel(x.date)}</option>)}</select></label>
+      <label style={{fontSize:11,color:'#62748a',display:'grid',gap:5}}>CURRENT INVENTORY DATE<select value={currentDate} onChange={e=>setCurrentDate(e.target.value)} style={input}>{snapshots.map(x=><option key={x.date} value={x.date}>{dateLabel(x.date)}</option>)}</select></label>
+      <label style={{fontSize:11,color:'#62748a',display:'grid',gap:5}}>PRODUCT FILTER<select value={productFilter} onChange={e=>setProductFilter(e.target.value)} style={input}><option value="ALL">All products</option>{productChanges.map(x=><option key={x.group} value={x.group}>{x.group}</option>)}</select></label>
+    </section>
+    {(!previous||!current) ? <div className="inv-alert">Select two inventory dates that have available tank records.</div> : previousDate>=currentDate ? <div className="inv-alert">Choose a current inventory date later than the previous inventory date.</div> : <>
+      <section style={{...card,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))',gap:12}}>
+        {[['PREVIOUS TOTAL INVENTORY',beforeTanks.reduce((s,x)=>s+x.total,0)],['CURRENT TOTAL INVENTORY',afterTanks.reduce((s,x)=>s+x.total,0)],['OVERALL INVENTORY CHANGE',afterTanks.reduce((s,x)=>s+x.total,0)-beforeTanks.reduce((s,x)=>s+x.total,0)]].map(([label,value])=><div key={label}><div style={{fontSize:11,color:'#718096',fontWeight:800}}>{label}</div><div style={{fontSize:22,fontWeight:900,color:label.includes('CHANGE')?(value>=0?'#087f5b':'#b42318'):'#003f70',marginTop:7}}>{fmt(value)}</div></div>)}
+      </section>
+      <section style={card}>
+        <h3 style={{margin:'0 0 5px',fontSize:15,color:'#003f70'}}>MONTHLY TRUCK SALES TREND — 2026</h3>
+        <p style={{fontSize:11,color:'#718096',margin:'0 0 12px'}}>Monthly truck-sales volume from January to December 2026. Use this year-wide trend to identify months with unusually high or low truck sales.</p>
+        {monthlyTruckSales.some(x=>x.total>0) ? <div style={{height:300,width:'100%'}}><ResponsiveContainer width="100%" height="100%"><LineChart data={monthlyTruckSales} margin={{top:8,right:18,left:4,bottom:8}}><CartesianGrid stroke="#e8eef5" vertical={false}/><XAxis dataKey="month" axisLine={false} tickLine={false} tick={{fill:'#708198',fontSize:11}}/><YAxis axisLine={false} tickLine={false} tick={{fill:'#708198',fontSize:10}} tickFormatter={v=>Number(v).toLocaleString('en-PH')}/><Tooltip formatter={v=>[fmt(v),'Truck Sales Volume']}/><Line type="monotone" dataKey="total" name="Truck Sales Volume" stroke="#0879bd" strokeWidth={3} dot={{r:4,fill:'#0879bd'}} activeDot={{r:6}}/></LineChart></ResponsiveContainer></div> : <div className="inv-alert">No truck-sales records available for 2026.</div>}
+      </section>
+      <section style={card}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+          <div><h3 style={{margin:'0 0 5px',fontSize:15,color:'#003f70'}}>DAILY TRUCK SALES — SELECTED MONTH</h3><p style={{fontSize:11,color:'#718096',margin:'0 0 12px'}}>Choose any month to view its daily truck-sales volume separately.</p></div>
+          <label style={{fontSize:11,color:'#62748a',display:'grid',gap:5,minWidth:150}}>SELECT MONTH<select value={truckSalesMonth} onChange={e=>setTruckSalesMonth(e.target.value)} style={input}>{monthNames.map((m,i)=><option key={m} value={String(i+1).padStart(2,'0')}>{m} 2026</option>)}</select></label>
+        </div>
+        {dailySelectedMonth.length ? <><div style={{height:300,width:'100%'}}><ResponsiveContainer width="100%" height="100%"><LineChart data={dailySelectedMonth} margin={{top:8,right:18,left:4,bottom:8}}><CartesianGrid stroke="#e8eef5" vertical={false}/><XAxis dataKey="day" tickFormatter={v=>String(v)} axisLine={false} tickLine={false} tick={{fill:'#708198',fontSize:10}}/><YAxis axisLine={false} tickLine={false} tick={{fill:'#708198',fontSize:10}} tickFormatter={v=>Number(v).toLocaleString('en-PH')}/><Tooltip labelFormatter={v=>`${monthNames[Number(truckSalesMonth)-1]} ${v}, 2026`} formatter={v=>[fmt(v),'Truck Sales Volume']}/><Line type="monotone" dataKey="total" name="Daily Truck Sales" stroke="#e0a800" strokeWidth={3} dot={{r:3,fill:'#e0a800'}} activeDot={{r:6}}/></LineChart></ResponsiveContainer></div>
+        <div style={{overflowX:'auto',marginTop:8}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Date','Truck Sales Volume'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{dailySelectedMonth.map(r=><tr key={r.date}><td style={td}>{dateLabel(r.date)}</td><td style={{...td,fontWeight:800}}>{fmt(r.total)}</td></tr>)}</tbody></table></div></> : <div className="inv-alert">No truck-sales records found for {monthNames[Number(truckSalesMonth)-1]} 2026 with the selected product filter.</div>}
+      </section>
+      <section style={card}><h3 style={{margin:'0 0 5px',fontSize:15,color:'#003f70'}}>PRODUCT-LEVEL RECONCILIATION</h3><p style={{fontSize:11,color:'#718096',margin:'0 0 12px'}}>Inventory change is compared with recorded IN/OUT throughput dated within the selected inventory date range. A remaining difference is not automatically an error; timing, adjustments, and missing records may affect reconciliation.</p>
+        <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Product','Previous Inventory','Current Inventory','Inventory Change','Recorded IN','Recorded OUT','Net Throughput','Unexplained Difference'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{shownProducts.map(x=><tr key={x.group}><td style={td}><b>{x.group}</b></td><td style={td}>{fmt(x.before)}</td><td style={td}>{fmt(x.after)}</td><td style={{...td,fontWeight:800,color:x.change>=0?'#087f5b':'#b42318'}}>{x.change>0?'+':''}{fmt(x.change)}</td><td style={{...td,color:'#087f5b'}}>{fmt(x.incoming)}</td><td style={{...td,color:'#b54708'}}>{fmt(x.outgoing)}</td><td style={td}>{fmt(x.net)}</td><td style={{...td,fontWeight:800,color:Math.abs(x.unexplained)<0.001?'#087f5b':'#b42318'}}>{fmt(x.unexplained)}</td></tr>)}{!shownProducts.length&&<tr><td style={td} colSpan={8}>No matching product records.</td></tr>}</tbody></table></div>
+      </section>
+      <section style={card}><h3 style={{margin:'0 0 5px',fontSize:15,color:'#003f70'}}>TANK-BY-TANK INVENTORY CHANGE</h3><p style={{fontSize:11,color:'#718096',margin:'0 0 12px'}}>Tank figures come directly from the two inventory snapshots. Throughput is not assigned to a tank unless the source transaction explicitly identifies that tank.</p>
+        <div style={{overflowX:'auto',maxHeight:460,overflowY:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead style={{position:'sticky',top:0,background:'#fff'}}><tr>{['Tank','Product','Previous Inventory','Current Inventory','Change'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{tankChanges.filter(x=>productFilter==='ALL'||x.group===productFilter).sort((a,b)=>Math.abs(b.change||0)-Math.abs(a.change||0)).map((x,i)=><tr key={`${x.tank}-${x.group}-${i}`}><td style={td}><b>{x.tank}</b></td><td style={td}>{x.product}</td><td style={td}>{x.before===null?'—':fmt(x.before)}</td><td style={td}>{x.after===null?'—':fmt(x.after)}</td><td style={{...td,fontWeight:800,color:x.change===null?'#718096':x.change>=0?'#087f5b':'#b42318'}}>{x.change===null?'No comparison':`${x.change>0?'+':''}${fmt(x.change)}`}</td></tr>)}</tbody></table></div>
+      </section>
+      <section style={card}><h3 style={{margin:'0 0 5px',fontSize:15,color:'#003f70'}}>POSSIBLE CAUSES — SOURCE TRANSACTIONS</h3><p style={{fontSize:11,color:'#718096',margin:'0 0 12px'}}>These are recorded throughput transactions within the selected date range. They are possible explanations by product, not confirmed tank-level allocations.</p>
+        <div style={{overflowX:'auto',maxHeight:520,overflowY:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead style={{position:'sticky',top:0,background:'#fff'}}><tr>{['Date','Direction','Product','Volume','Channel','Vessel / Truck','Source / Counterparty','Remarks','Source Sheet','Tank Reference'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{rangeRecords.map((r,i)=><tr key={`${r.sourceSheet}-${r.date}-${i}`}><td style={td}>{dateLabel(r.date)}</td><td style={{...td,fontWeight:800,color:r.direction==='IN'?'#087f5b':'#b54708'}}>{r.direction}</td><td style={td}>{r.product}</td><td style={{...td,fontWeight:800,textAlign:'right'}}>{fmt(r.volume)}</td><td style={td}>{r.channel}</td><td style={td}>{r.vesselTruck||'—'}</td><td style={td}>{r.counterparty||'—'}</td><td style={td}>{r.remarks||'—'}</td><td style={td}>{r.sourceSheet}</td><td style={td}>{r.tank||'Not specified'}</td></tr>)}{!rangeRecords.length&&<tr><td style={td} colSpan={10}>No throughput records found within the selected dates.</td></tr>}</tbody></table></div>
+      </section>
+    </>}
     {!!data.metadata?.sourceWarnings?.length && <div className="inv-alert"><b>Source data check:</b> {data.metadata.sourceWarnings.map(w=>`${w.sheet} · ${w.date}: ${w.detail}`).join(' ')}</div>}
-    <section style={{...card,display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:12}}>
-      <label style={{fontSize:11,color:'#62748a',display:'grid',gap:5}}>FROM<input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} style={{padding:9,border:'1px solid #dbe4ee',borderRadius:8,color:'#20364d'}}/></label>
-      <label style={{fontSize:11,color:'#62748a',display:'grid',gap:5}}>TO<input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} style={{padding:9,border:'1px solid #dbe4ee',borderRadius:8,color:'#20364d'}}/></label>
-      <label style={{fontSize:11,color:'#62748a',display:'grid',gap:5}}>MOVEMENT<select value={direction} onChange={e=>setDirection(e.target.value)} style={{padding:10,border:'1px solid #dbe4ee',borderRadius:8,color:'#20364d'}}><option value="ALL">All movements</option><option value="IN">Incoming</option><option value="OUT">Outgoing</option></select></label>
-      <label style={{fontSize:11,color:'#62748a',display:'grid',gap:5}}>PRODUCT<select value={product} onChange={e=>setProduct(e.target.value)} style={{padding:10,border:'1px solid #dbe4ee',borderRadius:8,color:'#20364d'}}><option value="ALL">All products</option>{products.map(p=><option key={p}>{p}</option>)}</select></label>
-      <label style={{fontSize:11,color:'#62748a',display:'grid',gap:5}}>CHANNEL<select value={channel} onChange={e=>setChannel(e.target.value)} style={{padding:10,border:'1px solid #dbe4ee',borderRadius:8,color:'#20364d'}}><option value="ALL">All channels</option>{channels.map(c=><option key={c}>{c}</option>)}</select></label>
-    </section>
-    <section style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(175px,1fr))',gap:12}}>
-      {[['TOTAL INCOMING',incoming,'#087f5b'],['TOTAL OUTGOING',outgoing,'#b54708'],['NET MOVEMENT',net,net>=0?'#087f5b':'#b42318'],['TRANSACTIONS',filtered.length,'#003f70']].map(([label,value,color])=><div key={label} style={card}><div style={{fontSize:11,color:'#718096',fontWeight:800,letterSpacing:.5}}>{label}</div><div style={{fontSize:24,fontWeight:900,color,marginTop:8}}>{typeof value==='number'&&label==='TRANSACTIONS'?fmt(value):fmt(value)}</div></div>)}
-    </section>
-    <section style={card}>
-      <h3 style={{margin:'0 0 12px',fontSize:15,color:'#003f70'}}>DAILY IN / OUT SUMMARY</h3>
-      <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Date','Incoming','Outgoing','Net Movement'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{daily.map(d=><tr key={d.date}><td style={td}>{new Date(d.date+'T00:00:00').toLocaleDateString('en-PH',{month:'short',day:'2-digit',year:'numeric'})}</td><td style={{...td,color:'#087f5b',fontWeight:700}}>{fmt(d.incoming)}</td><td style={{...td,color:'#b54708',fontWeight:700}}>{fmt(d.outgoing)}</td><td style={{...td,fontWeight:800}}>{fmt(d.incoming-d.outgoing)}</td></tr>)}{!daily.length&&<tr><td style={td} colSpan={4}>No transactions for the selected filters.</td></tr>}</tbody></table></div>
-    </section>
-    <section style={card}>
-      <h3 style={{margin:'0 0 12px',fontSize:15,color:'#003f70'}}>TRANSACTION DETAILS</h3>
-      <div style={{overflowX:'auto',maxHeight:520,overflowY:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead style={{position:'sticky',top:0,background:'#fff'}}><tr>{['Date','IN / OUT','Channel','Product','Volume','Vessel / Truck','Source / Counterparty','Remarks','Source Sheet'].map(x=><th style={th} key={x}>{x}</th>)}</tr></thead><tbody>{filtered.map((r,i)=><tr key={`${r.sourceSheet}-${r.date}-${i}`}><td style={td}>{r.date}</td><td style={{...td,fontWeight:800,color:r.direction==='IN'?'#087f5b':'#b54708'}}>{r.direction}</td><td style={td}>{r.channel}</td><td style={td}>{r.product}</td><td style={{...td,fontWeight:800,textAlign:'right'}}>{fmt(r.volume)}</td><td style={td}>{r.vesselTruck||'—'}</td><td style={td}>{r.counterparty||'—'}</td><td style={td}>{r.remarks||'—'}</td><td style={td}>{r.sourceSheet}</td></tr>)}{!filtered.length&&<tr><td style={td} colSpan={9}>No transactions for the selected filters.</td></tr>}</tbody></table></div>
-      <div style={{fontSize:11,color:'#718096',marginTop:10}}>Showing {fmt(filtered.length)} matching transaction lines. Tank assignment is intentionally left blank unless the source record identifies a tank.</div>
-    </section>
+    <div style={{fontSize:11,color:'#718096',padding:'0 3px'}}>Important: Product codes are grouped only where the source labels support a clear match. Some blends/codes may require operational confirmation. All source volumes are preserved; no tank allocation is inferred.</div>
   </div>
 }
 
