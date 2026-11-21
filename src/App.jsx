@@ -7,7 +7,7 @@ import {
   Menu, PackageCheck, Search, Settings2, ShieldCheck, Truck, Wallet, X, Warehouse, Wrench, Plus, ArrowDownToLine, ArrowUpFromLine
 } from 'lucide-react'
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis
+  Area, AreaChart, Bar, BarChart, CartesianGrid, ComposedChart, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis
 } from 'recharts'
 import { db } from './firebase'
 import { addDoc, collection, doc, onSnapshot, runTransaction, serverTimestamp, updateDoc } from 'firebase/firestore'
